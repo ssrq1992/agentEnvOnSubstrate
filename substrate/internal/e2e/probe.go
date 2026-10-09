@@ -1,0 +1,70 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package e2e
+
+import (
+	"context"
+	"testing"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+)
+
+// ProbeName is the name of the probe fixture's WorkerPool and ActorTemplate,
+// inside the atespace (and matching k8s namespace) DeployProbe returns.
+const ProbeName = "probe"
+
+// probeManifests are the fixture templates DeployProbe deploys: the k8s pool
+// half and the substrate ActorTemplate half.
+var probeManifests = SubstrateFixtureManifests{
+	Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
+	Template: "internal/e2e/fixtures/probe/probe-template.yaml.tmpl",
+}
+
+// ProbeOption adjusts what DeployProbe installs.
+type ProbeOption func(*probeConfig)
+
+type probeConfig struct{ trustBundle bool }
+
+// WithTrustBundle projects the egress trust bundle into the probe's
+// system-info volume, ensuring the cluster-scoped bundle exists first.
+//
+// Only suites that test the bundle should ask for it. An actor whose template
+// includes the bundle won't start if the bundle is missing, so a suite that
+// just needs a probe shouldn't depend on it.
+func WithTrustBundle() ProbeOption { return func(c *probeConfig) { c.trustBundle = true } }
+
+// DeployProbe builds the probe fixture image and installs the fixture for the
+// sandbox class under test, removing it when the test ends. name
+// distinguishes the caller (by convention its suite name): each suite gets
+// its own copy of the fixture, so no suite's cleanup can delete the fixture
+// out from under another running concurrently. It returns the fixture's
+// atespace (which also names the k8s namespace holding the pool) and the
+// created ActorTemplate, already golden-snapshotted.
+func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string, *ateapipb.ActorTemplate) {
+	t.Helper()
+
+	var cfg probeConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.trustBundle {
+		// Every actor from this template — the fixture's golden boot included —
+		// fails closed while the bundle is missing, so it has to exist first.
+		EnsureEgressTrustBundle(t, context.Background(), GetClients())
+	}
+
+	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, bucket, name, cfg.trustBundle)
+	return atespace, templates[0]
+}

@@ -1,0 +1,163 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package extproc
+
+// Substrate's dataplane attribute namespace: the filter-state objects and CEL
+// request attributes the gateways carry alongside a request, declared here once
+// so a key means the same thing in the Go that reads it and in the dataplane
+// configuration that sets it.
+//
+// Every substrate-owned key is rooted at the reverse-DNS "dev.ate." prefix.
+// These keys live in namespaces shared with the proxies that carry them -- Envoy
+// filter state, agentgateway CEL -- where a vendor-qualified root is what keeps
+// substrate's keys from colliding with anyone else's. That is a different
+// constraint from the telemetry attributes in internal/ateattr, which are
+// substrate's own metric dimensions and stay on dotted "ate.". Neither is the
+// "ate.dev/" slash form, which is Kubernetes labels only.
+const (
+	// TargetActorFilterStateKey carries the ingress actor routing target across
+	// Envoy's CONNECT internal-listener hop.
+	TargetActorFilterStateKey = "dev.ate.target.actor"
+	// ConnectAuthorityFilterStateKey carries the outer CONNECT authority across
+	// the same hop. Ingress selects the target port from it; the egress request
+	// legs read the IP:port the actor dialed from it, since the port a rule
+	// names is that one and not any port in the request's Host.
+	ConnectAuthorityFilterStateKey = "dev.ate.connect.authority"
+
+	// TargetActorFilterStateAttribute is the CEL expression ext_proc evaluates
+	// to read the corresponding filter state.
+	TargetActorFilterStateAttribute      = "filter_state['" + TargetActorFilterStateKey + "']"
+	ConnectAuthorityFilterStateAttribute = "filter_state['" + ConnectAuthorityFilterStateKey + "']"
+
+	// ActorIdentityFilterStateKey holds the actor's SPIFFE ID
+	// (resources.ActorSPIFFEID), read from the peer certificate's URI SAN.
+	// The outer CONNECT chain sets it from %DOWNSTREAM_PEER_URI_SAN% and
+	// shares it with the inner legs, which have no certificate of their own.
+	ActorIdentityFilterStateKey = "dev.ate.actor.identity"
+	// ActorIdentityFilterStateAttribute is the CEL expression ext_proc
+	// evaluates to read ActorIdentityFilterStateKey back out.
+	ActorIdentityFilterStateAttribute = "filter_state['" + ActorIdentityFilterStateKey + "']"
+
+	// EgressMetadataNamespace is the dynamic-metadata namespace the CONNECT
+	// leg answers in. Envoy only keeps it when the outer ext_proc filter lists
+	// it under metadata_options.receiving_namespaces; the manifest tests check.
+	EgressMetadataNamespace = "dev.ate.egress"
+	// EgressDialedPortKey, under EgressMetadataNamespace, is the port the
+	// actor dialed, set on every allowed CONNECT. The outer chain copies it
+	// into UpstreamDynamicPortFilterStateKey for the passthrough chain.
+	EgressDialedPortKey = "dialed_port"
+	// EgressPolicyMetadataNamespace holds the SNI rules returned on CONNECT.
+	// The outer chain copies it as JSON into filter state of the same name for
+	// the egress-policy module: {"rules": [{"pattern": ..., "mode": ...}]},
+	// most specific first.
+	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
+	// EgressSNIRulesKey, under EgressPolicyMetadataNamespace, is the ordered
+	// list of rules; EgressSNIRulePatternKey and EgressSNIRuleModeKey are the
+	// fields of each.
+	EgressSNIRulesKey       = "rules"
+	EgressSNIRulePatternKey = "pattern"
+	EgressSNIRuleModeKey    = "mode"
+
+	// EgressFilterChainFilterStateKey holds the egress-policy module's verdict:
+	// the filter chain name the egress manifest's matcher selects on.
+	EgressFilterChainFilterStateKey = "dev.ate.egress.filter_chain"
+	// EgressFilterChainMITM: TLS terminated on EgressTLSMITMFilterChainName.
+	EgressFilterChainMITM = "mitm"
+	// EgressFilterChainPassthrough: forwarded unread. Unused for now.
+	EgressFilterChainPassthrough = "passthrough"
+	// EgressFilterChainCleartext: not TLS, EgressCleartextFilterChainName.
+	EgressFilterChainCleartext = "cleartext"
+	// EgressFilterChainDenied matches no chain; the connection is closed.
+	EgressFilterChainDenied = "denied"
+	// EgressDialKey, under EgressMetadataNamespace, is a request leg's answer
+	// for an allowed request: where it goes. The manifests' routes match on
+	// it, one route per value and none without, so a request with no answer
+	// has no route.
+	EgressDialKey = "dial"
+	// EgressDialName: a hostname rule matched, so the forward proxy resolves
+	// EgressDialHostKey and dials it on the port the actor dialed.
+	EgressDialName = "name"
+	// EgressDialAddress: an address or all rule matched, so the request goes
+	// to the address the actor dialed, read from the ORIGINAL_DST filter state
+	// the CONNECT leg's answer set.
+	EgressDialAddress = "address"
+	// EgressDialHostKey, under EgressMetadataNamespace, comes with
+	// EgressDialName: the name the request was decided on, without the Host's
+	// port, which was never checked. The request chains copy it into
+	// UpstreamDynamicHostFilterStateKey, and their by-name routes need it.
+	EgressDialHostKey = "host"
+
+	// directionAttribute carries the Direction outright, for dataplanes that
+	// have no Envoy filter chain to name. It is set from a dataplane expression,
+	// never from a client header. No dataplane in this repository sets it today:
+	// Envoy names its filter chain, and agentgateway routes both directions
+	// through its own substrateIngress/substrateEgress policies rather than
+	// ext_proc.
+	directionAttribute = "dev.ate.extproc.direction"
+)
+
+// FilterChainNameAttribute is the CEL attribute carrying the name of the filter
+// chain that accepted the request. Envoy's own, not substrate's, so it is not
+// under "dev.ate.". The egress Envoy asks for it via request_attributes on its
+// ext_proc filter.
+//
+// Do not "improve" this to xds.listener_name: Envoy 1.34 cannot parse that one,
+// and rather than failing config load it logs "error parsing cel expression" at
+// trace level and sends an empty attributes map. An absent attribute means
+// ingress here, so every egress CONNECT would silently take the ingress path and
+// 404 on the actor DNS name parse.
+const FilterChainNameAttribute = "xds.filter_chain_name"
+
+// EgressDialedPortFormat is the set_filter_state format string that reads
+// EgressDialedPortKey back out.
+const EgressDialedPortFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":" + EgressDialedPortKey + ")%"
+
+// UpstreamDynamicPortFilterStateKey is Envoy's filter-state key for the port a
+// dynamic forward proxy dials, read before it falls back to its configured
+// port. The outer CONNECT chain sets it from EgressDialedPortKey.
+const UpstreamDynamicPortFilterStateKey = "envoy.upstream.dynamic_port"
+
+// EgressDialHostFormat is the set_filter_state format string that reads
+// EgressDialHostKey back out.
+const EgressDialHostFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":" + EgressDialHostKey + ")%"
+
+// UpstreamDynamicHostFilterStateKey is Envoy's filter-state key for the name a
+// dynamic forward proxy cluster dials in place of the Host, on
+// UpstreamDynamicPortFilterStateKey's port. Without it, a port written in the
+// Host wins. The request chains set it from EgressDialHostKey.
+const UpstreamDynamicHostFilterStateKey = "envoy.upstream.dynamic_host"
+
+// EgressPolicyMetadataFormat renders EgressPolicyMetadataNamespace as JSON.
+const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
+
+// OriginalDstFilterStateKey is Envoy's filter-state key for the address an
+// ORIGINAL_DST cluster dials. The gateway never writes it and dials only by
+// name; the request legs read it as an attribute.
+const OriginalDstFilterStateKey = "envoy.network.transport_socket.original_dst_address"
+
+// OriginalDstIPAttribute and OriginalDstPortAttribute are the CEL expressions
+// that read OriginalDstFilterStateKey, one field each. The object as a whole
+// is not readable: Envoy's CEL presents an object with field support as a
+// map, which ext_proc renders as the literal "CelMap value". The field names
+// are Envoy's (the same ones %FILTER_STATE(key:FIELD:ip)% takes); the port
+// arrives as a number.
+const (
+	OriginalDstIPAttribute   = "filter_state['" + OriginalDstFilterStateKey + "'].ip"
+	OriginalDstPortAttribute = "filter_state['" + OriginalDstFilterStateKey + "'].port"
+)
+
+// RequestedServerNameAttribute is the SNI of the connection a request arrived
+// on. The handler logs it next to the Host it authorized.
+const RequestedServerNameAttribute = "connection.requested_server_name"

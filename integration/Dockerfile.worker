@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1.7
+# Build context: agentEnvOnSubstrate. Build the modified AgentENV runtime first.
+ARG GO_IMAGE=golang:1.27.0-bookworm
+ARG AGENTENV_RUNTIME_IMAGE
+FROM ${GO_IMAGE} AS go-builder
+WORKDIR /src/substrate
+COPY substrate/ ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -trimpath -o /out/ateom-agentenv ./cmd/ateom-agentenv
+
+FROM ${AGENTENV_RUNTIME_IMAGE}
+COPY --from=go-builder /out/ateom-agentenv /usr/local/bin/ateom-agentenv
+RUN test -x /usr/local/bin/aenv-executor \
+    && mkdir -p /etc/agentenv \
+    && cp /workspace/config/default.toml /etc/agentenv/config.toml
+ENTRYPOINT ["/usr/local/bin/ateom-agentenv"]

@@ -1,0 +1,17 @@
+{
+  "schema": "agentenv-substrate-sdk-suite-v1",
+  "selectedAt": "2026-10-09",
+  "python": "3.12",
+  "e2bPython": "2.53.1",
+  "e2bTypeScript": "2.53.1",
+  "e2bCLI": "2.21.1",
+  "tsx": "4.23.15",
+  "codeInterpreterPython": "2.10.3",
+  "aenvCLI": {
+    "sourceTag": "v0.2.3",
+    "sourceCommit": "6cccaa7842bd5be2051111d4f74d9e37aa721244"
+  },
+  "status": "Versions pinned from official package metadata; runtime compatibility not yet verified",
+  "node": "22",
+  "npm": "10.9.8"
+}

@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1.7
+# Build context: agentEnvOnSubstrate; use the locally modified Substrate API.
+ARG GO_IMAGE=golang:1.27.0-bookworm
+FROM ${GO_IMAGE} AS build
+WORKDIR /src
+COPY substrate/ /src/substrate/
+COPY AgentENV/services/aenv-api-bridge/ /src/AgentENV/services/aenv-api-bridge/
+WORKDIR /src/AgentENV/services/aenv-api-bridge
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -o /out/aenv-api-bridge ./cmd/aenv-api-bridge
+WORKDIR /src/substrate
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -trimpath -o /out/ate-image-resolve ./cmd/ate-image-resolve
+FROM scratch
+COPY --from=build /out/aenv-api-bridge /aenv-api-bridge
+COPY --from=build /out/ate-image-resolve /ate-image-resolve
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+USER 65532:65532
+ENTRYPOINT ["/aenv-api-bridge"]
+CMD ["/etc/aenv-bridge/config.json"]

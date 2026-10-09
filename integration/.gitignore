@@ -1,0 +1,5 @@
+__pycache__/
+sdk/node_modules/
+sdk/.venv/
+sdk/.sdk-run-*/
+reports/

@@ -1,0 +1,6 @@
+[submodule "AgentENV"]
+	path = AgentENV
+	url = git@github.com:kvcache-ai/AgentENV.git
+[submodule "substrate"]
+	path = substrate
+	url = git@github.com:agent-substrate/substrate.git

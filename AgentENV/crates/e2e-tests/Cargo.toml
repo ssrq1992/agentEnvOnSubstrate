@@ -1,0 +1,19 @@
+[package]
+name = "agentenv-e2e-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+agentenv = { path = "../.." }
+agentenv-test-support = { path = "../test-support" }
+anyhow = "1.0"
+overlaybd = { path = "../../storage/overlaybd" }
+serde_json = "1"
+sha2 = { version = "0.10", features = ["asm"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "snapshot_oss_e2e_test"
+path = "tests/snapshot_oss_e2e_test.rs"

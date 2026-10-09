@@ -1,0 +1,50 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: agentenv-system
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - role.yaml
+  - rolebinding.yaml
+  - scheduler-service.yaml
+  - scheduler-deployment.yaml
+  - gateway-service.yaml
+  - gateway-deployment.yaml
+  - agentenv-headless-service.yaml
+  - agentenv-ublk-daemon-metrics-service.yaml
+  - agentenv-daemonset.yaml
+
+configMapGenerator:
+  - name: agentenv-k8s-config
+    files:
+      - config/agentenv.toml
+  - name: scheduler-k8s-config
+    files:
+      - config/scheduler.json
+  - name: gateway-k8s-config
+    files:
+      - config/gateway.json
+  - name: sandbox-proxy-config
+    literals:
+      - SANDBOX_PROXY_DOMAINS=
+
+secretGenerator:
+  - name: agentenv-auth
+    literals:
+      - AENV_API_KEY=
+
+images:
+  - name: agentenv-gateway
+    newName: agentenv-gateway
+    newTag: latest
+  - name: agentenv-scheduler
+    newName: agentenv-scheduler
+    newTag: latest
+  - name: agentenv-runtime
+    newName: agentenv-runtime
+    newTag: latest
+
+generatorOptions:
+  disableNameSuffixHash: true

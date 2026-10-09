@@ -1,0 +1,17 @@
+{
+  "log_level": "info",
+  "log_format": "json",
+  "scheduler": {
+    "grpc_listen_addr": ":9090",
+    "strategy": "round_robin",
+    "discovery": {
+      "mode": "kubernetes",
+      "kubernetes": {
+        "namespace": "agentenv-system",
+        "service_name": "agentenv-nodes",
+        "port": 8000,
+        "scheme": "http"
+      }
+    }
+  }
+}

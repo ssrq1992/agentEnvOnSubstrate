@@ -1,0 +1,137 @@
+name: Rust CI Setup
+description: Set up Rust toolchain, restore cargo cache, and optionally install CI dependencies.
+
+inputs:
+  components:
+    description: "Comma-separated Rust components to install (for example: rustfmt, clippy)."
+    required: false
+    default: ""
+  install_ci_deps:
+    description: Whether to run `make ci-deps`.
+    required: false
+    default: "true"
+  ci_deps_target:
+    description: Make target used when installing CI dependencies.
+    required: false
+    default: "ci-deps"
+  cache_ci_deps:
+    description: Whether to restore/save cache for ci-deps downloads.
+    required: false
+    default: "true"
+  cache_root:
+    description: Root directory for self-hosted local CI cache.
+    required: false
+    default: "/opt/ci-cache"
+
+runs:
+  using: composite
+  steps:
+    - name: Compute CI deps cache version
+      id: ci-deps-cache-version
+      shell: bash
+      run: |
+        set -euo pipefail
+        files=(
+          config/deps_manifest.toml
+          Makefile
+          adev/src/codegen.rs
+          adev/src/config.rs
+          adev/src/ensure_tool.rs
+          .github/actions/rust-ci-setup/action.yml
+        )
+        cache_version="$(sha256sum "${files[@]}" | sha256sum | cut -d' ' -f1)"
+        echo "cache_version=${cache_version}" >> "$GITHUB_OUTPUT"
+
+    - name: Configure local cache paths (self-hosted)
+      if: ${{ runner.environment == 'self-hosted' }}
+      shell: bash
+      env:
+        CACHE_ROOT: ${{ inputs.cache_root }}
+        REPO: ${{ github.repository }}
+        CACHE_VERSION: ${{ steps.ci-deps-cache-version.outputs.cache_version }}
+      run: |
+        set -euo pipefail
+        repo_key="${REPO//\//-}"
+        cargo_home="${CACHE_ROOT}/cargo-home"
+        cargo_target_dir="${CACHE_ROOT}/cargo-target/${repo_key}"
+        protoc_local_cache_dir="${CACHE_ROOT}/protoc/${CACHE_VERSION}"
+
+        if [[ ! -d "$CACHE_ROOT" || ! -w "$CACHE_ROOT" ]]; then
+          sudo mkdir -p "$CACHE_ROOT"
+          sudo chown -R "$(id -u):$(id -g)" "$CACHE_ROOT" || true
+        fi
+
+        mkdir -p "$cargo_home" "$cargo_target_dir" "$protoc_local_cache_dir"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        echo "CARGO_HOME=$cargo_home" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_DIR=$cargo_target_dir" >> "$GITHUB_ENV"
+        echo "PROTOC_LOCAL_CACHE_DIR=$protoc_local_cache_dir" >> "$GITHUB_ENV"
+
+    - name: Set up Rust toolchain
+      if: ${{ inputs.components == '' }}
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Set up Rust toolchain (with components)
+      if: ${{ inputs.components != '' }}
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.components }}
+
+    - name: Restore Rust cache
+      if: ${{ runner.environment != 'self-hosted' }}
+      uses: Swatinem/rust-cache@v2
+
+    - name: Restore CI deps cache (protoc)
+      id: ci-deps-cache
+      if: ${{ inputs.install_ci_deps == 'true' && inputs.cache_ci_deps == 'true' && runner.environment != 'self-hosted' }}
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ~/.local/bin/protoc
+          ~/.local/include/google/protobuf
+        key: ci-deps-protoc-${{ runner.os }}-${{ steps.ci-deps-cache-version.outputs.cache_version }}
+
+    - name: Restore CI deps from local cache (self-hosted)
+      if: ${{ inputs.install_ci_deps == 'true' && runner.environment == 'self-hosted' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$HOME/.local/bin" "$HOME/.local/include/google"
+        if [[ -x "${PROTOC_LOCAL_CACHE_DIR}/bin/protoc" ]]; then
+          cp -f "${PROTOC_LOCAL_CACHE_DIR}/bin/protoc" "$HOME/.local/bin/protoc"
+          chmod +x "$HOME/.local/bin/protoc"
+        fi
+        if [[ -d "${PROTOC_LOCAL_CACHE_DIR}/include/google/protobuf" ]]; then
+          rm -rf "$HOME/.local/include/google/protobuf"
+          cp -a "${PROTOC_LOCAL_CACHE_DIR}/include/google/protobuf" "$HOME/.local/include/google/protobuf"
+        fi
+
+    - name: Install CI dependencies
+      if: ${{ inputs.install_ci_deps == 'true' }}
+      shell: bash
+      run: make ${{ inputs.ci_deps_target }}
+
+    - name: Save CI deps to local cache (self-hosted)
+      if: ${{ inputs.install_ci_deps == 'true' && runner.environment == 'self-hosted' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${PROTOC_LOCAL_CACHE_DIR}/bin" "${PROTOC_LOCAL_CACHE_DIR}/include/google"
+        if [[ -x "$HOME/.local/bin/protoc" ]]; then
+          cp -f "$HOME/.local/bin/protoc" "${PROTOC_LOCAL_CACHE_DIR}/bin/protoc"
+          chmod +x "${PROTOC_LOCAL_CACHE_DIR}/bin/protoc"
+        fi
+        if [[ -d "$HOME/.local/include/google/protobuf" ]]; then
+          rm -rf "${PROTOC_LOCAL_CACHE_DIR}/include/google/protobuf"
+          cp -a "$HOME/.local/include/google/protobuf" "${PROTOC_LOCAL_CACHE_DIR}/include/google/protobuf"
+        fi
+
+    - name: Save CI deps cache (protoc)
+      if: ${{ inputs.install_ci_deps == 'true' && inputs.cache_ci_deps == 'true' && runner.environment != 'self-hosted' && steps.ci-deps-cache.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          ~/.local/bin/protoc
+          ~/.local/include/google/protobuf
+        key: ${{ steps.ci-deps-cache.outputs.cache-primary-key }}

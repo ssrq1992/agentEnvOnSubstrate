@@ -1,0 +1,171 @@
+name: Sandbox CI Setup
+description: Prepare AENV sandbox prerequisites for Firecracker-based integration runs.
+
+inputs:
+  ghcr_username:
+    description: Username for GHCR login.
+    required: true
+  ghcr_token:
+    description: Token for GHCR login.
+    required: true
+  cache_root:
+    description: Root directory for self-hosted local CI cache.
+    required: false
+    default: "/opt/ci-cache"
+  kvm_mode:
+    description: KVM permission mode. Use `kvm-group` or `user-rw`.
+    required: false
+    default: "kvm-group"
+
+runs:
+  using: composite
+  steps:
+    - name: Configure sandbox deps path
+      id: resolve-deps-path
+      shell: bash
+      run: |
+        set -euo pipefail
+        deps_path="$(realpath -m "${GITHUB_WORKSPACE}/config/../env")"
+
+        echo "AENV_DEPS_PATH=${deps_path}" >> "$GITHUB_ENV"
+        echo "deps_path=${deps_path}" >> "$GITHUB_OUTPUT"
+
+    - name: Prepare sandbox filesystem
+      shell: bash
+      run: |
+        set -euo pipefail
+        config_path="config/default.toml"
+        config_dir="$(dirname "$config_path")"
+        raw_home_path="$(grep '^home_path' "$config_path" | sed 's/.*= *"\(.*\)"/\1/')"
+        if [[ -z "$raw_home_path" ]]; then
+          echo "home_path not found or empty in ${config_path}" >&2
+          exit 1
+        fi
+        if [[ "$raw_home_path" = /* ]]; then
+          home_path="$(realpath -m "$raw_home_path")"
+        else
+          home_path="$(realpath -m "${config_dir}/${raw_home_path}")"
+        fi
+        sudo mkdir -p "$home_path"
+        sudo chown -R "$(id -u):$(id -g)" "$home_path"
+
+        # overlaybd-apply checks this default path before parsing its config argument.
+        sudo mkdir -p /etc/overlaybd
+        sudo sh -c 'test -e /etc/overlaybd/overlaybd.json || printf "{}\n" > /etc/overlaybd/overlaybd.json'
+
+    - name: Compute sandbox cache version
+      id: sandbox-cache-version
+      shell: bash
+      run: |
+        set -euo pipefail
+        files=(
+          config/deps_manifest.toml
+          src/setup/deps.rs
+          src/setup/overlaybd.rs
+          storage/overlaybd/src/tools/packaging.rs
+          storage/overlaybd/src/tools/oci.rs
+          .github/actions/sandbox-ci-setup/action.yml
+        )
+        cache_version="$(sha256sum "${files[@]}" | sha256sum | cut -d' ' -f1)"
+        echo "cache_version=${cache_version}" >> "$GITHUB_OUTPUT"
+
+    - name: Enable /dev/kvm access (kvm-group mode)
+      if: ${{ inputs.kvm_mode == 'kvm-group' }}
+      shell: bash
+      run: |
+        sudo chown root:kvm /dev/kvm || true
+        sudo chmod 0660 /dev/kvm
+        sudo usermod -aG kvm "$USER"
+
+    - name: Enable /dev/kvm access (user-rw mode)
+      if: ${{ inputs.kvm_mode == 'user-rw' }}
+      shell: bash
+      run: |
+        sudo chown "$USER" /dev/kvm || true
+        sudo chmod 0600 /dev/kvm
+
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ inputs.ghcr_username }}
+        password: ${{ inputs.ghcr_token }}
+
+    # Best-effort: copy whatever the local cache has into the deps path. The
+    # provision step below is authoritative and fills any gaps; the save step
+    # writes the completed tree back.
+    - name: Restore sandbox deps from local cache (self-hosted)
+      if: ${{ runner.environment == 'self-hosted' }}
+      shell: bash
+      env:
+        CACHE_ROOT: ${{ inputs.cache_root }}
+        DEPS_PATH: ${{ steps.resolve-deps-path.outputs.deps_path }}
+        CACHE_VERSION: ${{ steps.sandbox-cache-version.outputs.cache_version }}
+      run: |
+        set -euo pipefail
+        cache_dir="${CACHE_ROOT}/sandbox-deps/${CACHE_VERSION}"
+
+        if [[ ! -d "$CACHE_ROOT" || ! -w "$CACHE_ROOT" ]]; then
+          sudo mkdir -p "$CACHE_ROOT"
+          sudo chown -R "$(id -u):$(id -g)" "$CACHE_ROOT" || true
+        fi
+
+        mkdir -p "$DEPS_PATH"
+        if [[ -d "$cache_dir" ]]; then
+          cp -a "$cache_dir/." "$DEPS_PATH/"
+        fi
+
+    - name: Restore sandbox deps cache
+      id: sandbox-deps-cache
+      if: ${{ runner.environment != 'self-hosted' }}
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.resolve-deps-path.outputs.deps_path }}
+        key: sandbox-deps-${{ runner.os }}-${{ steps.sandbox-cache-version.outputs.cache_version }}
+
+    # Provisions everything tests shell out to (runtime packages like umoci,
+    # the version-pinned regctl, sandbox deps). Runs unconditionally: cheap
+    # no-op checks when the caches above are warm, downloads on miss.
+    - name: Provision sandbox prerequisites
+      shell: bash
+      run: cargo run --bin server -- --setup-only
+
+    - name: Provision non-root host access
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo --preserve-env=AENV_DEPS_PATH,AENV_HOME_PATH \
+          "${CARGO_TARGET_DIR:-${GITHUB_WORKSPACE}/target}/debug/server" \
+          --setup-host --runtime-user "$USER" --runtime-group "$(id -gn)"
+
+    - name: Verify sandbox host prerequisites
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ -d /sys/module/ublk_drv ]]
+        output="$(scripts/run-with-capabilities.sh sh -c 'id -u; sed -n "s/^CapEff:[[:space:]]*//p" /proc/self/status')"
+        [[ "$(sed -n '1p' <<< "$output")" != "0" ]]
+        # CAP_NET_ADMIN (bit 12) | CAP_SYS_ADMIN (bit 21) = 0x201000.
+        [[ "$(sed -n '2p' <<< "$output")" == "0000000000201000" ]]
+        scripts/run-with-capabilities.sh sh -c '
+          test -s /etc/overlaybd/overlaybd.json
+          test -r /etc/overlaybd/overlaybd.json
+          jq -e "type == \"object\"" /etc/overlaybd/overlaybd.json >/dev/null
+          exec 3<>/dev/kvm
+          exec 4<>/dev/ublk-control
+        '
+
+    - name: Save sandbox deps to local cache (self-hosted)
+      if: ${{ runner.environment == 'self-hosted' }}
+      shell: bash
+      env:
+        CACHE_ROOT: ${{ inputs.cache_root }}
+        DEPS_PATH: ${{ steps.resolve-deps-path.outputs.deps_path }}
+        CACHE_VERSION: ${{ steps.sandbox-cache-version.outputs.cache_version }}
+      run: |
+        set -euo pipefail
+        cache_key="${CACHE_VERSION}"
+        cache_dir="${CACHE_ROOT}/sandbox-deps/${cache_key}"
+        rm -rf "$cache_dir"
+        mkdir -p "$cache_dir"
+        cp -a "$DEPS_PATH/." "$cache_dir/"

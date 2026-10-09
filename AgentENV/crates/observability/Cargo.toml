@@ -1,0 +1,10 @@
+[package]
+name = "agentenv-observability"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+axum = "0.8"
+metrics-exporter-prometheus = "0.18.3"
+tokio = { version = "1", features = ["net", "rt", "time"] }

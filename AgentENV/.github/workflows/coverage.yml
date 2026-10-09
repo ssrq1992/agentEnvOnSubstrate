@@ -1,0 +1,134 @@
+name: Coverage
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "storage/**"
+      - "adev/**"
+      - ".github/actions/**"
+      - ".github/workflows/coverage.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  coverage:
+    outputs:
+      coverage_outcome: ${{ steps.coverage.outcome }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-ci-setup
+        with:
+          components: llvm-tools-preview
+          ci_deps_target: ci-deps
+      - uses: ./.github/actions/sandbox-ci-setup
+        with:
+          ghcr_username: ${{ github.actor }}
+          ghcr_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage report (informational, non-blocking)
+        id: coverage
+        continue-on-error: true
+        run: sg kvm -c "make coverage"
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-results
+          overwrite: true
+          if-no-files-found: warn
+          path: |
+            target/coverage
+      - name: Coverage run status (informational)
+        if: always()
+        run: |
+          if [ "${{ steps.coverage.outcome }}" != "success" ]; then
+            echo "Coverage execution failed (non-blocking by policy). Review coverage artifacts and step logs for details."
+          fi
+      - uses: ./.github/actions/sandbox-artifacts-cleanup
+        if: always()
+
+  publish-coverage-data:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.coverage.outputs.coverage_outcome == 'success'
+    needs: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-results
+          path: coverage-artifact
+      - name: Publish coverage metadata branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          source_dir="coverage-artifact"
+          if [[ -d "${source_dir}/target/coverage" ]]; then
+            source_dir="${source_dir}/target/coverage"
+          elif [[ -d "${source_dir}/coverage" ]]; then
+            source_dir="${source_dir}/coverage"
+          fi
+          source_dir="$(cd "${source_dir}" && pwd)"
+
+          if [[ ! -f "${source_dir}/badge.json" ]] || [[ ! -f "${source_dir}/badge.svg" ]] || [[ ! -f "${source_dir}/coverage.json" ]]; then
+            echo "::error::Missing required coverage files (badge.json, badge.svg, or coverage.json) in ${source_dir}"
+            ls -la "${source_dir}"
+            exit 1
+          fi
+
+          publish_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$publish_dir"
+          }
+          trap cleanup EXIT
+
+          cd "$publish_dir"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          if git ls-remote --exit-code --heads origin coverage-data >/dev/null 2>&1; then
+            git fetch --depth=1 origin coverage-data
+            git checkout -B coverage-data FETCH_HEAD
+          else
+            git checkout --orphan coverage-data
+          fi
+
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p coverage
+          cp "${source_dir}/badge.json" coverage/badge.json
+          cp "${source_dir}/badge.svg" coverage/badge.svg
+          cp "${source_dir}/coverage.json" coverage/coverage.json
+
+          git add coverage/badge.json coverage/badge.svg coverage/coverage.json
+          if git diff --cached --quiet; then
+            echo "No coverage metadata changes to publish."
+            exit 0
+          fi
+
+          git commit -m "chore: publish coverage metadata for ${GITHUB_SHA}"
+          if ! git push origin coverage-data 2>&1; then
+            echo "::error::Failed to push to coverage-data branch"
+            git remote -v
+            git status
+            git log --oneline -3
+            exit 1
+          fi

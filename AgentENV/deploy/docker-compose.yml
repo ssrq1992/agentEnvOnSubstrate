@@ -1,0 +1,111 @@
+x-agentenv-base: &agentenv-base
+  image: agentenv-runtime:latest
+  init: true
+  working_dir: /workspace
+  environment: &agentenv-environment
+    AENV_API_KEY:
+    AENV_CONFIG_PATH: /workspace/config/default.toml
+    AENV_VIRTUALIZATION_MODE: ${AENV_VIRTUALIZATION_MODE:-kvm}
+    API_ADDR: 0.0.0.0:8000
+    AENV_UBLK_DAEMON_BINARY_PATH: /usr/local/bin/uvm-ublk-daemon
+    AENV_OBSERVABILITY_SCHEDULER_REPORT_ENABLED: "true"
+    AENV_OBSERVABILITY_SCHEDULER_ENDPOINT: http://scheduler:9090
+    AENV_SNAPSHOT_LOCAL_CACHE_PATH: /var/cache/agentenv/snapshot-local-cache
+    AENV_SANDBOX_PROXY_DOMAINS: ${SANDBOX_PROXY_DOMAINS:-}
+    RUST_LOG: ${RUST_LOG:-agentenv=info,envd=info,uvm_ublk=info}
+  volumes:
+    - /dev:/dev
+    - ${CONFIG_PATH:-../config/default.toml}:/workspace/config/default.toml:ro
+    - type: bind
+      source: ${HOST_RESOLV_CONF:-/run/systemd/resolve/resolv.conf}
+      target: /run/systemd/resolve/resolv.conf
+      read_only: true
+      bind:
+        create_host_path: false
+    # Runtime assets are baked into the image by `server --setup-only`; compose
+    # persists committed snapshots and deployment secrets across restarts.
+    - agentenv-snapshot-store:/workspace/env/snapshot-store
+    - agentenv-auth:/workspace/env/secrets
+  devices:
+    - /dev/kvm:/dev/kvm
+  privileged: true
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+    interval: 10s
+    timeout: 120s
+    retries: 20
+    start_period: 20s
+  restart: unless-stopped
+
+x-control-plane-config-volume: &control-plane-config-volume
+  - ./docker/config/default.json:/config/default.json:ro
+
+services:
+  scheduler:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.scheduler
+    image: agentenv-scheduler:latest
+    container_name: scheduler
+    command: ["-config", "/config/default.json"]
+    depends_on:
+      agentenv-a:
+        condition: service_healthy
+      agentenv-b:
+        condition: service_healthy
+    volumes: *control-plane-config-volume
+    environment:
+      SCHEDULER_GRPC_LISTEN_ADDR: :9090
+      SCHEDULER_STRATEGY: round_robin
+    healthcheck:
+      test: ["CMD", "/grpc_health_probe", "-addr=127.0.0.1:9090"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.gateway
+    image: agentenv-gateway:latest
+    container_name: gateway
+    command: ["-config", "/config/default.json"]
+    depends_on:
+      scheduler:
+        condition: service_healthy
+    volumes:
+      - ./docker/config/default.json:/config/default.json:ro
+      - agentenv-auth:/run/secrets:ro
+    environment:
+      AENV_API_KEY:
+      GATEWAY_HTTP_LISTEN_ADDR: :8080
+      GATEWAY_SCHEDULER_ADDR: scheduler:9090
+      GATEWAY_SANDBOX_PROXY_DOMAINS: ${SANDBOX_PROXY_DOMAINS:-}
+    ports:
+      - "8000:8080"
+    restart: unless-stopped
+
+  agentenv-a:
+    <<: *agentenv-base
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.agentenv
+      args:
+        APT_MIRROR_BASE: ${APT_MIRROR_BASE:-}
+    container_name: agentenv-a
+    environment:
+      <<: *agentenv-environment
+      AENV_NODE_ID: node-a
+
+  agentenv-b:
+    <<: *agentenv-base
+    container_name: agentenv-b
+    environment:
+      <<: *agentenv-environment
+      AENV_NODE_ID: node-b
+
+volumes:
+  agentenv-auth:
+  agentenv-snapshot-store:

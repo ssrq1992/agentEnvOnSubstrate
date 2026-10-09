@@ -1,0 +1,10 @@
+[package]
+name = "agentenv-test-support"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+aws-config = "1.8.10"
+aws-sdk-s3 = "1.112.0"
+testcontainers = "0.23"

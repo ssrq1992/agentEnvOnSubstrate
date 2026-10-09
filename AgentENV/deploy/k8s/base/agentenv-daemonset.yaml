@@ -1,0 +1,152 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: agentenv-node
+  labels:
+    app.kubernetes.io/name: agentenv-node
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentenv-node
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentenv-node
+    spec:
+      terminationGracePeriodSeconds: 3600
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: agentenv
+          image: agentenv-runtime:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AENV_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentenv-auth
+                  key: AENV_API_KEY
+            - name: AENV_CONFIG_PATH
+              value: /workspace/config/agentenv.toml
+            - name: AENV_SANDBOX_ACCESS_TOKEN_HASH_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: agentenv-runtime-secrets
+                  key: sandbox-access-token-hash-seed
+                  optional: true
+            - name: AENV_VIRTUALIZATION_MODE
+              value: "kvm"
+            - name: API_ADDR
+              value: "0.0.0.0:8000"
+            - name: AENV_UBLK_DAEMON_BINARY_PATH
+              value: /usr/local/bin/uvm-ublk-daemon
+            - name: AENV_UBLK_DAEMON_METRICS_LISTEN_ADDR
+              value: "0.0.0.0:9103"
+            - name: AENV_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AENV_OBSERVABILITY_SCHEDULER_REPORT_ENABLED
+              value: "true"
+            - name: AENV_OBSERVABILITY_SCHEDULER_ENDPOINT
+              value: http://agentenv-scheduler:9090
+            - name: AENV_SANDBOX_PROXY_DOMAINS
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-proxy-config
+                  key: SANDBOX_PROXY_DOMAINS
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8000
+            - name: ublk-metrics
+              containerPort: 9103
+          resources:
+            requests:
+              # Kubernetes derives oom_score_adj from requests.memory:
+              #   oom_score_adj = 1000 - 1000 * (requests.memory / node_capacity)
+              # Without this, requests.memory defaults to 0 and oom_score_adj is
+              # set to 1000, the same as firecracker child processes, offering no
+              # protection. Setting some value ensures the agentenv container gets an
+              # oom_score_adj well below 1000, so it is killed after firecracker
+              # child processes (whose oom_score_adj we explicitly set to 1000) when
+              # the host runs out of memory. Change this value accordingly.
+              memory: 8Gi
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - "-c"
+                  - |
+                    echo "preStop: waiting for sandboxes to drain..."
+                    while true; do
+                      count=$(curl -sf -H "X-API-Key: ${AENV_API_KEY}" http://localhost:8000/sandboxes | jq 'length') || count=""
+                      if [ -z "$count" ]; then
+                        echo "preStop: failed to query sandbox count, retrying..."
+                        sleep 3
+                        continue
+                      fi
+                      echo "preStop: $count sandbox(es) remaining"
+                      if [ "$count" = "0" ]; then
+                        echo "preStop: all sandboxes drained, exiting"
+                        break
+                      fi
+                      sleep 3
+                    done
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - "-c"
+                  - |
+                    # cgroup v2: disable group OOM kill for this container's cgroup.
+                    # By default Kubernetes sets memory.oom.group=1, which means
+                    # the entire cgroup (including the agentenv server) is killed
+                    # whenever any process inside it is OOM-killed. Setting it to 0
+                    # makes the OOM killer target individual processes, so a
+                    # firecracker child being killed does not take down the server.
+                    CGROUP="$(awk -F: '/^0::/{print $3}' /proc/self/cgroup)"
+                    echo 0 > /sys/fs/cgroup/$CGROUP/memory.oom.group
+          securityContext:
+            privileged: true
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 48
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: agentenv-config
+              mountPath: /workspace/config/agentenv.toml
+              subPath: agentenv.toml
+              readOnly: true
+            - name: host-dev
+              mountPath: /dev
+      volumes:
+        - name: workspace
+          hostPath:
+            path: /var/lib/aenv
+            type: DirectoryOrCreate
+        - name: agentenv-config
+          configMap:
+            name: agentenv-k8s-config
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory

@@ -1,0 +1,34 @@
+[package]
+name = "uvm-ublk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+storage-util = { path = "../util", features = ["io-uring"] }
+overlaybd = { path = "../overlaybd", features = ["io-uring"] }
+
+anyhow = "1.0"
+ublk-sys = { package = "libublk-rs-sys", git = "https://github.com/ublk-org/libublk-rs.git", rev = "c6a3e06" }
+io-uring = "0.7.9"
+nix = { version = "0.30.1", features = ["event", "mman", "feature", "process", "fs"] }
+libc = "0.2.174"
+tokio = { version = "1.44.2", features = ["full"] }
+async-trait = "0.1.88"
+clap = { version = "4.5.38", features = ["derive"] }
+bytes = "1.11.0"
+parking_lot = "0.12.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1", features = ["v5"] }
+arc-swap = "1.7"
+
+tracing = "0.1.41"
+tracing-log = "0.2.0"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+tracing-bunyan-formatter = "0.3.10"
+
+[dev-dependencies]
+tempfile = "3"
+axum = "0.8.6"
+sha2 = { version = "0.10.9", features = ["asm"] }
+storage-util = { path = "../util", features = ["io-uring"] }

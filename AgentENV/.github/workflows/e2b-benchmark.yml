@@ -1,0 +1,40 @@
+name: E2B Local Bench
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-and-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Normalize workspace ownership before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d "${GITHUB_WORKSPACE}" ]]; then
+            echo "Workspace does not exist yet, skipping ownership normalization."
+            exit 0
+          fi
+
+          sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}" || true
+
+      - name: Checkout AgentENV repository
+        uses: actions/checkout@v4
+
+      - name: Run E2B benchmark script
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/e2b/run-e2b-benchmark.sh
+          ./scripts/e2b/run-e2b-benchmark.sh
+
+      - name: Normalize workspace ownership after run
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d "${GITHUB_WORKSPACE}" ]]; then
+            sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}" || true
+          fi

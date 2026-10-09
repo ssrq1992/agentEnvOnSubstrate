@@ -1,0 +1,218 @@
+openapi: 3.0.0
+info:
+  version: 0.1.0
+  title: AENV Custom Extension API
+  description: >-
+    HTTP API implemented by the custom extension service configured via
+    [custom_extension].url. The custom extension currently supports sandbox
+    lifecycle hooks (under /sandbox-hook/*), invoked by the AENV Firecracker
+    sandbox runtime; more capabilities may be added in the future. The runtime
+    treats any connection error, timeout, or non-2xx response as a failure of
+    the corresponding sandbox operation (except the best-effort stop
+    notification).
+
+    Instance identity: sandboxId alone is reused across pause/resume cycles,
+    so every start-fresh / start-resume hook carries a fresh
+    sandboxInstanceId that uniquely identifies one runtime instance of the
+    sandbox. The stop hook carries the sandboxInstanceId of the instance
+    being torn down. Because the stop notification is best-effort and may be
+    delivered out of order (e.g. a pause's stop arriving after the
+    resume's start-resume), the extension should treat (sandboxId,
+    sandboxInstanceId) as the identity of a running instance and ignore stop
+    notifications whose sandboxInstanceId is not the latest started instance
+    for that sandbox. The in-place pause+resume performed during snapshot
+    capture does not fire the stop hook and does not change the instance id.
+
+paths:
+  /sandbox-hook/start-fresh:
+    post:
+      operationId: sandboxStartFresh
+      summary: Invoked before a fresh sandbox boots, after its network slot is allocated.
+      description: >-
+        Called after the network slot is allocated and before the microVM is
+        configured. The extension may return extra kernel boot args that are
+        appended to the sandbox's boot args.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartFreshHookRequest"
+      responses:
+        "200":
+          description: Hook accepted; optional extra boot args to append.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartFreshHookResponse"
+
+  /sandbox-hook/start-resume:
+    post:
+      operationId: sandboxStartResume
+      summary: Invoked before a sandbox resumes from a snapshot, after its network slot is ready.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartResumeHookRequest"
+      responses:
+        "200":
+          description: Hook accepted.
+
+  /sandbox-hook/patch-params:
+    post:
+      operationId: sandboxPatchParams
+      summary: Applies an extension-defined patch to a sandbox's custom extension params.
+      description: >-
+        Called when a user PATCHes the sandbox's custom extension params. The
+        patch document is passed through verbatim; its semantics are defined
+        entirely by the extension. The hook must return the updated full
+        params, which the runtime stores as the new current value. A failure
+        response rejects the patch: the sandbox keeps its previous params and
+        the API call fails. The runtime does not serialize concurrent patches
+        to the same sandbox; if patch semantics are not commutative, the
+        extension must handle concurrency itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchCustomExtensionParamsHookRequest"
+      responses:
+        "200":
+          description: Hook accepted; returns the updated full params.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatchCustomExtensionParamsHookResponse"
+
+  /sandbox-hook/stop:
+    post:
+      operationId: sandboxStop
+      summary: Invoked when a sandbox stops, before its network resources are released.
+      description: >-
+        Called after the VM process is stopped but before the network slot is
+        released. Fired
+        whenever a sandbox runtime is torn down — including pause, which
+        stops the VM process and releases the network namespace after the
+        paused state is persisted (the subsequent resume creates a fresh
+        runtime and fires start-resume). In-place pause+resume during
+        snapshot capture does not fire this hook. Also sent best-effort
+        (fire-and-forget) when a started sandbox is dropped without an
+        explicit stop. Delivery failures are only logged by the runtime and
+        never fail sandbox teardown.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StopHookRequest"
+      responses:
+        "200":
+          description: Hook accepted.
+
+components:
+  schemas:
+    CustomExtensionParams:
+      type: object
+      description: >-
+        Opaque JSON object interpreted only by the custom extension. An
+        absent value and an empty object are equivalent: both mean empty
+        params.
+
+    StartFreshHookRequest:
+      type: object
+      required:
+        - sandboxId
+        - sandboxInstanceId
+        - networkNamespacePath
+        - hostInteractionIp
+      properties:
+        sandboxId:
+          type: string
+        sandboxInstanceId:
+          type: string
+          description: >-
+            Unique identifier of this runtime instance of the sandbox. A new
+            value is generated for every start-fresh / start-resume; the
+            subsequent stop hook carries the same value.
+        networkNamespacePath:
+          type: string
+          description: Host path of the sandbox's network namespace file (e.g. /var/run/netns/agentenv-ns-*).
+        hostInteractionIp:
+          type: string
+          format: ipv4
+          description: Per-runtime host interaction address routed to this sandbox.
+        customExtensionParams:
+          $ref: "#/components/schemas/CustomExtensionParams"
+
+    StartFreshHookResponse:
+      type: object
+      properties:
+        extraBootArgs:
+          type: string
+          nullable: true
+          description: Extra kernel boot args appended to the sandbox boot args.
+
+    StartResumeHookRequest:
+      type: object
+      required:
+        - sandboxId
+        - sandboxInstanceId
+        - networkNamespacePath
+        - hostInteractionIp
+      properties:
+        sandboxId:
+          type: string
+        sandboxInstanceId:
+          type: string
+          description: >-
+            Unique identifier of this runtime instance of the sandbox. A new
+            value is generated for every start-fresh / start-resume; the
+            subsequent stop hook carries the same value.
+        networkNamespacePath:
+          type: string
+          description: Host path of the sandbox's network namespace file (e.g. /var/run/netns/agentenv-ns-*).
+        hostInteractionIp:
+          type: string
+          format: ipv4
+          description: Per-runtime host interaction address routed to this sandbox.
+        customExtensionParams:
+          $ref: "#/components/schemas/CustomExtensionParams"
+
+    PatchCustomExtensionParamsHookRequest:
+      type: object
+      required:
+        - sandboxId
+        - patch
+      properties:
+        sandboxId:
+          type: string
+        patch:
+          description: >-
+            Opaque JSON patch document passed through verbatim from the
+            user's PATCH request. Its semantics are defined entirely by the
+            extension.
+
+    PatchCustomExtensionParamsHookResponse:
+      type: object
+      properties:
+        customExtensionParams:
+          $ref: "#/components/schemas/CustomExtensionParams"
+
+    StopHookRequest:
+      type: object
+      required:
+        - sandboxId
+        - sandboxInstanceId
+      properties:
+        sandboxId:
+          type: string
+        sandboxInstanceId:
+          type: string
+          description: >-
+            Identifier of the runtime instance being torn down: the value
+            delivered by that instance's start-fresh / start-resume hook.
+            May arrive after a newer start for the same sandboxId; ignore it
+            when it does not match the latest started instance.

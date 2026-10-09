@@ -1,0 +1,28 @@
+[package]
+name = "envd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tonic = "0.14.2"
+prost = "0.14.3"
+prost-types = "0.14.3"
+tonic-prost = "0.14.2"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync"] }
+hyper = "1"
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
+tower = { version = "0.5.2", features = ["util"] }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+anyhow = "1.0.100"
+http_client = { path = "./http-client" }
+reqwest = { version = "^0.13", default-features = false, features = ["json", "multipart", "stream"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14.2"
+
+[dev-dependencies]
+futures-util = "0.3.31"
+tempfile = "3.22.0"

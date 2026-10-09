@@ -1,0 +1,9 @@
+{
+  "name": "agentenv-e2e-ts",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4"
+  }
+}

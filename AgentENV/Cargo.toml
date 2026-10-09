@@ -1,0 +1,152 @@
+[package]
+name = "agentenv"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+
+[workspace]
+members = [
+    ".",
+    "adev",
+    "crates/aenv",
+    "crates/benchmarks",
+    "crates/e2e-tests",
+    "crates/linux-cap",
+    "crates/observability",
+    "crates/object-store-operator",
+    "crates/test-support",
+    "crates/shell-util",
+    "crates/warm-pool",
+    "src/api/generated",
+    "src/custom_extension_api/generated",
+    "thirdparty/firecracker-client",
+    "thirdparty/envd",
+    "storage/util",
+    "storage/overlaybd",
+    "storage/ublk",
+    "storage/ublk-daemon",
+]
+
+[workspace.package]
+version = "0.2.3"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+vendored-openssl = ["dep:openssl-sys", "openssl-sys/vendored"]
+
+[dev-dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dependencies]
+firecracker_client = { version = "1.15.1", path = "thirdparty/firecracker-client" }
+envd = { version = "0.1.0", path = "thirdparty/envd" }
+custom_extension_client = { version = "0.1.0", path = "src/custom_extension_api/generated" }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+opendal = { version = "0.55.0", features = ["services-s3"] }
+object-store-operator = { path = "crates/object-store-operator" }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+httparse = "1.10"
+tls-parser = "0.12.2"
+http-body-util = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+rocksdb = "0.24.0"
+tower = "0.5.2"
+anyhow = "1.0.100"
+tempfile = "3.22.0"
+nix = { version = "0.31", features = ["sched", "mount", "fs", "signal", "user", "resource", "uio"] }
+libc = "0.2"
+rtnetlink = "0.20"
+netlink-packet-route = "0.28"
+ipnetwork = { version = "0.21", features = ["serde"] }
+hickory-resolver = "0.26.1"
+futures = "0.3"
+tonic = "0.14.2"
+tonic-prost = "0.14.2"
+prost = "0.14.3"
+prost-types = "0.14.3"
+thiserror = "2.0.18"
+index-set = "0.2"
+uuid = { version = "1", features = ["serde", "v7"] }
+toml = "0.9.11"
+confique = { version = "0.4.0", features = ["toml"] }
+which = "8.0.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
+metrics = "0.24"
+agentenv-observability = { path = "crates/observability" }
+time = { version = "0.3", features = ["serde-well-known", "macros"] }
+agentenv_http_server = { path = "src/api/generated" }
+async-trait = "0.1"
+axum = { version = "0.8", features = ["multipart", "ws"] }
+axum-extra = { version = "0.12", features = [
+    "cookie",
+    "query",
+    "typed-header",
+] }
+bytes = "1"
+headers = "0.4"
+http = "1"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+url = "2.5"
+clap = { version = "4", features = ["derive"] }
+tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
+uvm-ublk = { path = "storage/ublk" }
+uvm-ublk-daemon = { path = "storage/ublk-daemon" }
+shell-util = { path = "crates/shell-util" }
+linux-cap = { path = "crates/linux-cap" }
+warm-pool = { path = "crates/warm-pool" }
+ublk-sys = { package = "libublk-rs-sys", git = "https://github.com/ublk-org/libublk-rs.git", rev = "c6a3e06" }
+overlaybd = { path = "storage/overlaybd" }
+storage-util = { path = "storage/util" }
+dashmap = "6.1.0"
+io-uring = "0.7.9"
+tokio-tungstenite = "0.28"
+sha2 = { version = "0.10", features = ["asm"] }
+hmac = "0.12"
+subtle = "2.6"
+hex = "0.4"
+semver = "1"
+iroh = "1.0.3"
+iroh-blobs = "0.103.0"
+rand = "0.10"
+flate2 = "1"
+tar = "0.4"
+openssl-sys = { version = "0.9", optional = true }
+
+[build-dependencies]
+tonic-prost-build = "0.14.2"
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.dev.package.block-buffer]
+opt-level = 3
+
+[profile.dev.package.crypto-common]
+opt-level = 3
+
+[profile.dev.package.rocksdb]
+opt-level = 3
+debug = 0
+
+[profile.dev.package.librocksdb-sys]
+opt-level = 3
+debug = 0
+
+[profile.test.package.rocksdb]
+opt-level = 3
+debug = 0
+
+[profile.test.package.librocksdb-sys]
+opt-level = 3
+debug = 0

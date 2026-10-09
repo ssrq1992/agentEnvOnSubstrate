@@ -1,0 +1,36 @@
+# Keep Docker build context small for multi-stage server builds.
+.git
+.github
+.vscode
+.env
+.env.*
+*.env
+
+# Large runtime or build artifacts not needed for image build context.
+/target
+/target/**
+/target-agent-integration
+/target-agent-integration/**
+/target-*
+/target-*/**
+**/target
+**/target-*
+/env
+/env/**
+/env-local
+/env-local/**
+/env-*
+/env-*/**
+**/.cache
+**/.tmp
+
+# Local caches and transient outputs.
+**/__pycache__
+**/*.pyc
+*.log
+
+# Files not needed for image build context.
+scripts
+docs
+*.rst
+*.md

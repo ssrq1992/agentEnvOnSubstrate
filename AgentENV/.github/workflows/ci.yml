@@ -1,0 +1,64 @@
+name: AENV CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "**.rs"
+      - "Makefile"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "rust-toolchain.toml"
+      - "scripts/install.sh"
+      - "scripts/run-with-capabilities.sh"
+      - "scripts/tests/setup-ublk-access.sh"
+      - "scripts/tests/verify-capability-runner.sh"
+      - "scripts/tests/verify-install-service.sh"
+      - ".github/actions/**"
+      - ".github/workflows/ci.yml"
+  push:
+    paths:
+      - "**.rs"
+      - "Makefile"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "rust-toolchain.toml"
+      - "scripts/install.sh"
+      - "scripts/run-with-capabilities.sh"
+      - "scripts/tests/setup-ublk-access.sh"
+      - "scripts/tests/verify-capability-runner.sh"
+      - "scripts/tests/verify-install-service.sh"
+      - ".github/actions/**"
+      - ".github/workflows/ci.yml"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-ci-setup
+        with:
+          components: rustfmt
+          install_ci_deps: "false"
+      - name: Formatting
+        run: make fmt
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-ci-setup
+        with:
+          components: clippy
+      - name: Clippy
+        run: make clippy
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-ci-setup
+      - name: Configure ublk test host
+        run: sudo scripts/tests/setup-ublk-access.sh "$(id -un)" "$(id -gn)"
+      - name: Unit tests
+        run: make test-unit PROFILE=debug

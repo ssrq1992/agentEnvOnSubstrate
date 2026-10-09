@@ -1,0 +1,51 @@
+name: Mutation Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [agentenv, overlaybd, uvm-ublk]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-ci-setup
+        with:
+          ci_deps_target: ci-deps-protoc
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Mutation tests (${{ matrix.package }})
+        id: mutants
+        continue-on-error: true
+        # Memory limit per test: 8192MB (prevents OOM from taking down runner)
+        # Jobs: 12 parallel
+        run: cargo adev mutants --package ${{ matrix.package }} --jobs 12 --memory-limit-mb 8192
+      - name: Upload mutation artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutation-results-${{ matrix.package }}
+          overwrite: true
+          if-no-files-found: warn
+          path: |
+            mutants.out
+            target/mutants.log
+      - name: Mutation run status (informational)
+        if: always()
+        run: |
+          if [ "${{ steps.mutants.outcome }}" != "success" ]; then
+            echo "Mutation execution failed (non-blocking by policy). Review artifacts and logs."
+          else
+            echo "Mutation execution completed. Review artifacts and logs for survivors."
+          fi
+      - uses: ./.github/actions/sandbox-artifacts-cleanup
+        if: always()

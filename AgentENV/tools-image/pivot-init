@@ -1,0 +1,172 @@
+#!/agentenv/bin/busybox sh
+# Post-pivot entry point for the AgentENV tools drive.
+# Runs inside the user's filesystem after pivot_root.
+# /agentenv/ is a bind-mount of the tools drive.
+#
+# Supervises envd under runsv so it restarts on crash/OOM/SIGKILL, then hands
+# PID 1 over to the user image's init entry.
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root
+
+BB=/agentenv/bin/busybox
+
+die() {
+    echo "AGENTENV PIVOT INIT FATAL: $*" >&2
+    exec "$BB" sh
+}
+
+generate_resolv_conf() {
+    $BB mkdir -p /etc /run
+    TMP_RESOLV=/run/agentenv-resolv.conf
+
+    $BB rm -f "$TMP_RESOLV"
+    if [ -r /proc/net/pnp ]; then
+        $BB grep -E '^(nameserver|domain|search)[[:space:]]' /proc/net/pnp >"$TMP_RESOLV" 2>/dev/null || true
+    fi
+
+    if [ ! -s "$TMP_RESOLV" ]; then
+        echo "AGENTENV PIVOT INIT WARN: no DNS entries found in /proc/net/pnp" >&2
+        $BB rm -f "$TMP_RESOLV"
+        return 0
+    fi
+
+    # User images may ship /etc/resolv.conf as a symlink into a distro-specific
+    # runtime directory. Replace it with a concrete file derived from the
+    # kernel-provided ip=... boot argument so arbitrary images get working DNS.
+    if [ -L /etc/resolv.conf ] || [ -e /etc/resolv.conf ]; then
+        $BB rm -f /etc/resolv.conf 2>/dev/null || true
+    fi
+
+    $BB mv "$TMP_RESOLV" /etc/resolv.conf 2>/dev/null \
+        || $BB cp "$TMP_RESOLV" /etc/resolv.conf 2>/dev/null \
+        || echo "AGENTENV PIVOT INIT WARN: failed to write /etc/resolv.conf" >&2
+}
+
+# ---- Bootstrap virtual filesystems a distro init would normally mount ----
+# Must happen before `generate_resolv_conf` (writes to /run) and before envd
+# starts. Every step fails open (2>/dev/null) because we want the guest to
+# boot even if one of these tweaks is refused by the kernel config, and the
+# missing piece will surface as a targeted runtime error instead of a PID 1
+# abort.
+
+# devpts for pty allocation. Without /dev/pts + /dev/ptmx wired up anything
+# that wants a PTY (ssh, tmux, e2b connect, python pty/pexpect) fails with
+# `open /dev/ptmx: no such file or directory`.
+$BB mkdir -p /dev/pts
+$BB mount -n -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts 2>/dev/null
+[ -e /dev/ptmx ] || $BB ln -sf pts/ptmx /dev/ptmx
+
+# POSIX shared memory. Chromium, Python multiprocessing, PostgreSQL and
+# anything calling shm_open(3) need this.
+$BB mkdir -p /dev/shm
+$BB mount -n -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm 2>/dev/null
+
+# /run as tmpfs — PID/socket files belong on an ephemeral fs rather than
+# being persisted onto the user image's rootfs through pause/resume cycles.
+$BB mkdir -p /run
+$BB mount -n -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null
+$BB mkdir -p /run/lock
+
+# stdio device symlinks. devtmpfs creates these on most kernels, but a
+# minimal kernel config or a stripped user image may not have them.
+[ -e /dev/fd ]     || $BB ln -sf /proc/self/fd    /dev/fd
+[ -e /dev/stdin ]  || $BB ln -sf /proc/self/fd/0  /dev/stdin
+[ -e /dev/stdout ] || $BB ln -sf /proc/self/fd/1  /dev/stdout
+[ -e /dev/stderr ] || $BB ln -sf /proc/self/fd/2  /dev/stderr
+
+# Bring loopback up. The kernel's ip=... boot arg configures eth0 but leaves
+# lo DOWN, so 127.0.0.1 is unreachable until we fix it here.
+$BB ip link set lo up 2>/dev/null \
+    || $BB ifconfig lo up 2>/dev/null \
+    || echo "AGENTENV PIVOT INIT WARN: failed to bring up loopback interface" >&2
+
+# /etc/hosts fallback for images that don't ship one. Most base images do,
+# but FROM scratch / distroless-style images may not.
+if [ ! -s /etc/hosts ]; then
+    {
+        echo "127.0.0.1 localhost"
+        echo "::1 localhost"
+    } > /etc/hosts
+fi
+
+# ---- Guest-visible integration points ----
+
+# Expose envd as a stable guest command.
+$BB mkdir -p /usr/local/bin
+$BB ln -sf /agentenv/envd /usr/local/bin/envd
+
+# envd wraps guest processes in `/usr/bin/ionice ... /usr/bin/nice ...`. Minimal
+# user images (Alpine/musl, distroless, FROM scratch) do not always ship
+# coreutils or util-linux, so provide BusyBox-backed fallbacks without
+# overriding an image that already has real nice(1)/ionice(1).
+$BB mkdir -p /usr/bin
+if [ ! -x /usr/bin/nice ]; then
+    $BB ln -sf /agentenv/bin/busybox /usr/bin/nice
+fi
+if [ ! -x /usr/bin/ionice ]; then
+    $BB ln -sf /agentenv/bin/busybox /usr/bin/ionice
+fi
+
+# For images without /bin/sh, fall back to BusyBox.
+$BB mkdir -p /bin
+if [ ! -x /bin/sh ]; then
+    $BB ln -sf /agentenv/bin/busybox /bin/sh
+fi
+
+# Some images may not provide /etc/passwd
+# at all, so bootstrap the root identity before envd starts.
+if [ ! -e /etc/passwd ]; then
+    LOGIN_SHELL=/bin/sh
+    if [ -x /bin/bash ]; then
+        LOGIN_SHELL=/bin/bash
+    fi
+
+    $BB mkdir -p /etc /root
+    $BB printf 'root:x:0:0:root:/root:%s\n' "$LOGIN_SHELL" > /etc/passwd
+    $BB chmod 0644 /etc/passwd
+fi
+
+# Prepare remaining runtime directories envd and the guest init commonly
+# expect (/run is already mounted above as a tmpfs).
+$BB mkdir -p /var/run /tmp /var/log/agentenv/envd /run/sv/envd/log
+
+# Populate /etc/resolv.conf from the kernel's ip=... boot parameter state so
+# arbitrary user images get working DNS without needing a distro-specific unit.
+generate_resolv_conf
+
+# Supervise envd under runsv so that crashes, OOM-kills, and accidental
+# SIGKILLs from inside the guest trigger an automatic restart. runsv enforces
+# a 1-second minimum between restarts to prevent tight crash loops.
+#
+# Run scripts are written to the /run tmpfs at boot so the tools image does
+# not need a separate sv/ directory. /agentenv/bin/busybox is invoked directly
+# for runsv and svlogd since no applet symlinks are created.
+$BB cat > /run/sv/envd/run << 'RUNSV_EOF'
+#!/agentenv/bin/busybox sh
+exec 2>>/var/log/agentenv/envd.stderr.log  # append across restarts; unbounded but VM-ephemeral
+exec /agentenv/envd
+RUNSV_EOF
+$BB chmod 0755 /run/sv/envd/run
+
+$BB cat > /run/sv/envd/log/run << 'RUNSV_EOF'
+#!/agentenv/bin/busybox sh
+exec /agentenv/bin/busybox svlogd -tt /var/log/agentenv/envd
+RUNSV_EOF
+$BB chmod 0755 /run/sv/envd/log/run
+
+/agentenv/bin/busybox runsv /run/sv/envd \
+    >/var/log/agentenv/envd-sv.log \
+    2>&1 &
+
+USER_INIT_PATH=""
+for candidate in /init /sbin/init /bin/init /bin/sh; do
+    if [ -x "$candidate" ]; then
+        USER_INIT_PATH="$candidate"
+        break
+    fi
+done
+
+[ -n "$USER_INIT_PATH" ] || die "no executable init found in user image"
+
+exec "$USER_INIT_PATH"

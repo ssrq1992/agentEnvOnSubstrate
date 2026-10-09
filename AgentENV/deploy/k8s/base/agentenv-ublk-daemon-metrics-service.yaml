@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentenv-ublk-daemon-metrics
+  labels:
+    app.kubernetes.io/name: agentenv-node
+    app.kubernetes.io/component: ublk-daemon-metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9103"
+    prometheus.io/path: "/metrics"
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: agentenv-node
+  ports:
+    - name: ublk-metrics
+      port: 9103
+      targetPort: ublk-metrics

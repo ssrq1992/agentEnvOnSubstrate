@@ -1,0 +1,54 @@
+/// Wraps a shell argument in single quotes if it contains characters that need quoting.
+/// Internal single quotes are escaped as `'\''`.
+pub fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let safe = s
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '+' | '='));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_quote;
+
+    #[test]
+    fn safe_chars_pass_through() {
+        assert_eq!(shell_quote("nginx"), "nginx");
+        assert_eq!(shell_quote("/bin/sh"), "/bin/sh");
+        assert_eq!(shell_quote("node:20"), "node:20");
+    }
+
+    #[test]
+    fn wraps_special_chars() {
+        assert_eq!(shell_quote("daemon off;"), "'daemon off;'");
+        assert_eq!(shell_quote("$HOME"), "'$HOME'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn escapes_embedded_single_quotes() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        // Three consecutive single quotes: each ' becomes '\'' giving ''\'''\'''\'''
+        assert_eq!(shell_quote("'''"), "''\\'''\\'''\\'''");
+    }
+
+    #[test]
+    fn prevents_variable_expansion() {
+        // $ inside single quotes is not expanded by bash.
+        assert_eq!(shell_quote("$HOME"), "'$HOME'");
+        assert_eq!(shell_quote("${VAR:-default}"), "'${VAR:-default}'");
+    }
+
+    #[test]
+    fn backslash_is_literal_inside_single_quotes() {
+        // Backslash has no special meaning inside single quotes; only quoting needed.
+        assert_eq!(shell_quote("a\\b"), "'a\\b'");
+    }
+}

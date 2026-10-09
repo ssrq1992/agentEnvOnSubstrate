@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: agentenv-system
+
+resources:
+  - ../../base
+
+secretGenerator:
+  - name: agentenv-runtime-secrets
+    literals:
+      - sandbox-access-token-hash-seed=agentenv-local-dev-access-token-hash-seed
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+  - target:
+      kind: DaemonSet
+      name: agentenv-node
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/0/hostPath/path
+        value: /var/lib/aenv
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: repo-env
+          mountPath: /workspace/env
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: repo-env
+          hostPath:
+            path: ""
+            type: Directory

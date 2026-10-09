@@ -1,0 +1,54 @@
+name: Envd Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      log_level:
+        description: "Log level for the tests"
+        required: false
+  pull_request:
+    paths:
+      - "thirdparty/envd/**"
+      - "scripts/tests/test_envd.sh"
+      - "scripts/lib/common.sh"
+      - "Makefile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/actions/rust-ci-setup/**"
+      - ".github/workflows/envd-tests.yml"
+  push:
+    paths:
+      - "thirdparty/envd/**"
+      - "scripts/tests/test_envd.sh"
+      - "scripts/lib/common.sh"
+      - "Makefile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/actions/rust-ci-setup/**"
+      - ".github/workflows/envd-tests.yml"
+
+env:
+  RUST_LOG: ${{ github.event.inputs.log_level || 'info' }}
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  envd-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-ci-setup
+        with:
+          ci_deps_target: ci-deps-protoc
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Envd tests
+        run: make test-envd

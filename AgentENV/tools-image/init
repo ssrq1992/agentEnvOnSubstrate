@@ -1,0 +1,96 @@
+#!/agentenv/bin/busybox sh
+# AgentENV tools drive init (PID 1).
+# Boot on /dev/vda (tools drive), pivot_root to /dev/vdb (user image),
+# then hand off to the post-pivot bootstrap at /agentenv/pivot-init.
+#
+# No "set -e" here. PID 1 should fail into a shell instead of exiting and
+# panicking the guest on recoverable bootstrap errors.
+
+BB=/agentenv/bin/busybox
+die() { echo "INIT FATAL: $*" >&2; exec $BB sh; }
+
+# Minimal virtual filesystems needed before pivot_root.
+$BB mount -n -t proc proc /proc || die "mount proc"
+$BB mount -n -t sysfs sysfs /sys || die "mount sysfs"
+if $BB mount -n -t cgroup2 cgroup2 /sys/fs/cgroup 2>/dev/null; then
+    for c in cpu cpuset memory io pids; do
+        echo "+$c" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null
+    done
+fi
+
+# Default writable user image.
+$BB mount -n -o rw /dev/vdb /mnt/user || die "mount /dev/vdb"
+
+# Minimal user images may not ship the directories that become mount targets
+# after pivot_root. Create them on the mounted user rootfs before switching.
+$BB mkdir -p \
+    /mnt/user/proc \
+    /mnt/user/dev \
+    /mnt/user/sys \
+    /mnt/user/run \
+    /mnt/user/tmp \
+    /mnt/user/var/log/agentenv \
+    /mnt/user/agentenv
+$BB chmod 1777 /mnt/user/tmp 2>/dev/null || true
+
+# Re-expose bundled tools in the pivoted filesystem.
+$BB mount -n --bind /agentenv /mnt/user/agentenv || die "bind-mount tools"
+
+# Extra drives requested by AgentENV:
+#   agentenv_drives=vdc:/mnt/main,vdd:/mnt/data:sub/path
+# Each entry is vd<letter>:<mountPath>[:<subPath>]. mountPath and subPath are
+# guaranteed not to contain ':' by API validation, so ':' is an unambiguous
+# separator. When subPath is set, only that sub-directory of the drive is
+# exposed at <mountPath> (Kubernetes subPath style).
+for arg in $($BB cat /proc/cmdline); do
+    case "$arg" in
+        agentenv_drives=*)
+            IFS=','
+            for entry in ${arg#agentenv_drives=}; do
+                DEV="${entry%%:*}"
+                REST="${entry#*:}"
+                MNT="${REST%%:*}"
+                case "$REST" in
+                    *:*) SUB="${REST#*:}" ;;
+                    *)   SUB="" ;;
+                esac
+                $BB mkdir -p "/mnt/user$MNT"
+                if [ -n "$SUB" ]; then
+                    # Mount the drive at a private staging dir, bind the
+                    # requested sub-directory onto the guest mountPath, then
+                    # lazy-detach the staging mount so only the bind remains.
+                    # Cleanup of the staging mount/dir always runs so we never
+                    # leak it into the pivoted user filesystem on failure.
+                    STAGE="/mnt/user/.agentenv-drive-$DEV"
+                    $BB mkdir -p "$STAGE"
+                    if $BB mount -n "/dev/$DEV" "$STAGE"; then
+                        $BB mount -n --bind "$STAGE/$SUB" "/mnt/user$MNT" \
+                            || echo "INIT WARN: bind /dev/$DEV/$SUB -> $MNT failed"
+                        $BB umount -l "$STAGE"
+                    else
+                        echo "INIT WARN: mount /dev/$DEV -> $STAGE failed"
+                    fi
+                    $BB rmdir "$STAGE" 2>/dev/null
+                else
+                    $BB mount -n "/dev/$DEV" "/mnt/user$MNT" \
+                        || echo "INIT WARN: mount /dev/$DEV -> $MNT failed"
+                fi
+            done
+            unset IFS
+            ;;
+    esac
+done
+
+# Switch to the writable user image as the live root filesystem.
+$BB mkdir -p /mnt/user/.pivot_old
+cd /mnt/user || die "cd /mnt/user"
+$BB pivot_root . .pivot_old || die "pivot_root"
+
+BB=/agentenv/bin/busybox
+$BB mount -n --move /.pivot_old/proc /proc || die "move proc"
+$BB mount -n --move /.pivot_old/dev /dev || die "move dev"
+$BB mount -n --move /.pivot_old/sys /sys || die "move sysfs"
+$BB umount -l /.pivot_old 2>/dev/null
+$BB rmdir /.pivot_old 2>/dev/null
+
+exec /agentenv/pivot-init

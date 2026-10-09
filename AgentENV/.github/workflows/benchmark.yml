@@ -1,0 +1,58 @@
+name: Benchmarks
+
+on: [workflow_dispatch]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-ci-setup
+      - name: Check /dev/kvm availability
+        id: kvm
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm not available."
+            exit 1
+          fi
+      - uses: ./.github/actions/sandbox-ci-setup
+        with:
+          ghcr_username: ${{ github.actor }}
+          ghcr_token: ${{ secrets.GITHUB_TOKEN }}
+          kvm_mode: user-rw
+      - name: Benchmarks
+        run: make bench PROFILE=release
+      - name: Prepare benchmark artifacts
+        if: always()
+        run: |
+          echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-<unset>}"
+          CRITERION_DIR=""
+          if [ -n "${CARGO_TARGET_DIR:-}" ] && [ -d "${CARGO_TARGET_DIR}/criterion" ]; then
+            CRITERION_DIR="${CARGO_TARGET_DIR}/criterion"
+          elif [ -d target/criterion ]; then
+            CRITERION_DIR="target/criterion"
+          fi
+
+          if [ -n "${CRITERION_DIR}" ]; then
+            echo "Using criterion directory: ${CRITERION_DIR}"
+            sudo chown -R "$(id -u)":"$(id -g)" "${CRITERION_DIR}" || true
+            chmod -R a+rX "${CRITERION_DIR}" || true
+            ls -la "${CRITERION_DIR}" || true
+            echo "CRITERION_PATH=${CRITERION_DIR}" >> "${GITHUB_ENV}"
+          else
+            echo "No criterion directory found"
+            echo "CRITERION_PATH=target/criterion" >> "${GITHUB_ENV}"
+          fi
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: criterion-results-${{ github.run_id }}
+          path: ${{ env.CRITERION_PATH }}
+          if-no-files-found: warn
+      - uses: ./.github/actions/sandbox-artifacts-cleanup
+        if: always()

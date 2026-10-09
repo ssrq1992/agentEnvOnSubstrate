@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentenv-gateway
+  labels:
+    app.kubernetes.io/name: agentenv-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentenv-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentenv-gateway
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: gateway
+          image: agentenv-gateway:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config
+            - /config/gateway.json
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: AENV_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentenv-auth
+                  key: AENV_API_KEY
+            - name: GATEWAY_SANDBOX_PROXY_DOMAINS
+              valueFrom:
+                configMapKeyRef:
+                  name: sandbox-proxy-config
+                  key: SANDBOX_PROXY_DOMAINS
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - name: gateway-config
+              mountPath: /config/gateway.json
+              subPath: gateway.json
+              readOnly: true
+      volumes:
+        - name: gateway-config
+          configMap:
+            name: gateway-k8s-config

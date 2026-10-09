@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentenv-scheduler
+  labels:
+    app.kubernetes.io/name: agentenv-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentenv-scheduler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentenv-scheduler
+    spec:
+      serviceAccountName: agentenv-scheduler
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: scheduler
+          image: agentenv-scheduler:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config
+            - /config/scheduler.json
+          ports:
+            - name: grpc
+              containerPort: 9090
+          readinessProbe:
+            exec:
+              command:
+                - /grpc_health_probe
+                - -addr=127.0.0.1:9090
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /grpc_health_probe
+                - -addr=127.0.0.1:9090
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - name: scheduler-config
+              mountPath: /config/scheduler.json
+              subPath: scheduler.json
+              readOnly: true
+      volumes:
+        - name: scheduler-config
+          configMap:
+            name: scheduler-k8s-config

@@ -14,6 +14,8 @@
 
 syntax = "proto3";
 
+import "executor.proto";
+
 package ateom;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateompb";
@@ -32,6 +34,14 @@ option go_package = "github.com/agent-substrate/substrate/internal/proto/ateompb
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
 service Ateom {
+  // Allocation-fenced runtime metadata; contains no access credentials.
+  rpc ReadRuntimeInfo(agentenv.executor.v1.ReadRuntimeInfoRequest) returns (agentenv.executor.v1.InspectResponse) {}
+  // AgentENV guest measurements, distinct from host cgroup consumption.
+  rpc ReadGuestStats(agentenv.executor.v1.ReadGuestStatsRequest) returns (agentenv.executor.v1.StatsResponse) {}
+  // AgentENV-only live policy mutation; success confirms the exact revision.
+  rpc ApplyNetworkPolicy(agentenv.executor.v1.ApplyNetworkPolicyRequest) returns (agentenv.executor.v1.ApplyNetworkPolicyResponse) {}
+  rpc ApplyExtensionParams(agentenv.executor.v1.ApplyExtensionParamsRequest) returns (agentenv.executor.v1.ApplyExtensionParamsResponse) {}
+
   // RunWorkload tells ateom to begin running a new workload (one or more
   // containers, potentially with shared filesystems).
   rpc RunWorkload(RunWorkloadRequest) returns (RunWorkloadResponse) {}
@@ -40,6 +50,10 @@ service Ateom {
   // workload to object storage, and then completely reset itself to a blank
   // state (back to "available" state.)
   rpc CheckpointWorkload(CheckpointWorkloadRequest) returns (CheckpointWorkloadResponse) {}
+
+  // Capture FULL AgentENV state while keeping the source workload running.
+  // The caller supplies an operation-specific checkpoint directory.
+  rpc CaptureWorkload(CheckpointWorkloadRequest) returns (CheckpointWorkloadResponse) {}
 
   // RestoreWorkload restores a workload from checkpoint that was previously
   // written by CheckpointWorkload.  Ateom will handle downloading the correct
@@ -128,6 +142,8 @@ message ActorDirs {
 }
 
 message TerminateWorkloadRequest {
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 9;
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
@@ -142,6 +158,10 @@ message TerminateWorkloadResponse {
 }
 
 message RunWorkloadRequest {
+  // +k8s:opaqueType
+  agentenv.executor.v1.LaunchSpec agentenv_launch = 15;
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 14;
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
@@ -270,6 +290,8 @@ enum SnapshotScope {
 }
 
 message CheckpointWorkloadRequest {
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 12;
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
@@ -313,6 +335,10 @@ message CheckpointWorkloadResponse {
 }
 
 message RestoreWorkloadRequest {
+  // +k8s:opaqueType
+  agentenv.executor.v1.LaunchSpec agentenv_launch = 19;
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 18;
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
@@ -370,6 +396,8 @@ enum SandboxClass {
   SANDBOX_CLASS_GVISOR = 1;
   // Micro-VM (cmd/ateom-microvm).
   SANDBOX_CLASS_MICROVM = 2;
+  // AgentENV / Firecracker with Worker-local ublk storage.
+  SANDBOX_CLASS_AGENTENV = 3;
 }
 
 // StatsSource is how a sample's measurements were obtained. The two are not

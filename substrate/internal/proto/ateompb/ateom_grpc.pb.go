@@ -22,6 +22,7 @@ package ateompb
 
 import (
 	context "context"
+	aenvexecutorpb "github.com/agent-substrate/substrate/internal/proto/aenvexecutorpb"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -33,8 +34,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	Ateom_ReadRuntimeInfo_FullMethodName        = "/ateom.Ateom/ReadRuntimeInfo"
+	Ateom_ReadGuestStats_FullMethodName         = "/ateom.Ateom/ReadGuestStats"
+	Ateom_ApplyNetworkPolicy_FullMethodName     = "/ateom.Ateom/ApplyNetworkPolicy"
+	Ateom_ApplyExtensionParams_FullMethodName   = "/ateom.Ateom/ApplyExtensionParams"
 	Ateom_RunWorkload_FullMethodName            = "/ateom.Ateom/RunWorkload"
 	Ateom_CheckpointWorkload_FullMethodName     = "/ateom.Ateom/CheckpointWorkload"
+	Ateom_CaptureWorkload_FullMethodName        = "/ateom.Ateom/CaptureWorkload"
 	Ateom_RestoreWorkload_FullMethodName        = "/ateom.Ateom/RestoreWorkload"
 	Ateom_GetWorkloadStats_FullMethodName       = "/ateom.Ateom/GetWorkloadStats"
 	Ateom_GetActiveWorkloadStats_FullMethodName = "/ateom.Ateom/GetActiveWorkloadStats"
@@ -59,6 +65,13 @@ const (
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
 type AteomClient interface {
+	// Allocation-fenced runtime metadata; contains no access credentials.
+	ReadRuntimeInfo(ctx context.Context, in *aenvexecutorpb.ReadRuntimeInfoRequest, opts ...grpc.CallOption) (*aenvexecutorpb.InspectResponse, error)
+	// AgentENV guest measurements, distinct from host cgroup consumption.
+	ReadGuestStats(ctx context.Context, in *aenvexecutorpb.ReadGuestStatsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.StatsResponse, error)
+	// AgentENV-only live policy mutation; success confirms the exact revision.
+	ApplyNetworkPolicy(ctx context.Context, in *aenvexecutorpb.ApplyNetworkPolicyRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error)
+	ApplyExtensionParams(ctx context.Context, in *aenvexecutorpb.ApplyExtensionParamsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyExtensionParamsResponse, error)
 	// RunWorkload tells ateom to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error)
@@ -66,6 +79,9 @@ type AteomClient interface {
 	// workload to object storage, and then completely reset itself to a blank
 	// state (back to "available" state.)
 	CheckpointWorkload(ctx context.Context, in *CheckpointWorkloadRequest, opts ...grpc.CallOption) (*CheckpointWorkloadResponse, error)
+	// Capture FULL AgentENV state while keeping the source workload running.
+	// The caller supplies an operation-specific checkpoint directory.
+	CaptureWorkload(ctx context.Context, in *CheckpointWorkloadRequest, opts ...grpc.CallOption) (*CheckpointWorkloadResponse, error)
 	// RestoreWorkload restores a workload from checkpoint that was previously
 	// written by CheckpointWorkload.  Ateom will handle downloading the correct
 	// gVisor / runsc version to match the checkpoint.
@@ -136,6 +152,46 @@ func NewAteomClient(cc grpc.ClientConnInterface) AteomClient {
 	return &ateomClient{cc}
 }
 
+func (c *ateomClient) ReadRuntimeInfo(ctx context.Context, in *aenvexecutorpb.ReadRuntimeInfoRequest, opts ...grpc.CallOption) (*aenvexecutorpb.InspectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.InspectResponse)
+	err := c.cc.Invoke(ctx, Ateom_ReadRuntimeInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) ReadGuestStats(ctx context.Context, in *aenvexecutorpb.ReadGuestStatsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.StatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.StatsResponse)
+	err := c.cc.Invoke(ctx, Ateom_ReadGuestStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) ApplyNetworkPolicy(ctx context.Context, in *aenvexecutorpb.ApplyNetworkPolicyRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.ApplyNetworkPolicyResponse)
+	err := c.cc.Invoke(ctx, Ateom_ApplyNetworkPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) ApplyExtensionParams(ctx context.Context, in *aenvexecutorpb.ApplyExtensionParamsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyExtensionParamsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.ApplyExtensionParamsResponse)
+	err := c.cc.Invoke(ctx, Ateom_ApplyExtensionParams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *ateomClient) RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunWorkloadResponse)
@@ -150,6 +206,16 @@ func (c *ateomClient) CheckpointWorkload(ctx context.Context, in *CheckpointWork
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CheckpointWorkloadResponse)
 	err := c.cc.Invoke(ctx, Ateom_CheckpointWorkload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) CaptureWorkload(ctx context.Context, in *CheckpointWorkloadRequest, opts ...grpc.CallOption) (*CheckpointWorkloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckpointWorkloadResponse)
+	err := c.cc.Invoke(ctx, Ateom_CaptureWorkload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +280,13 @@ func (c *ateomClient) TerminateWorkload(ctx context.Context, in *TerminateWorklo
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
 type AteomServer interface {
+	// Allocation-fenced runtime metadata; contains no access credentials.
+	ReadRuntimeInfo(context.Context, *aenvexecutorpb.ReadRuntimeInfoRequest) (*aenvexecutorpb.InspectResponse, error)
+	// AgentENV guest measurements, distinct from host cgroup consumption.
+	ReadGuestStats(context.Context, *aenvexecutorpb.ReadGuestStatsRequest) (*aenvexecutorpb.StatsResponse, error)
+	// AgentENV-only live policy mutation; success confirms the exact revision.
+	ApplyNetworkPolicy(context.Context, *aenvexecutorpb.ApplyNetworkPolicyRequest) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error)
+	ApplyExtensionParams(context.Context, *aenvexecutorpb.ApplyExtensionParamsRequest) (*aenvexecutorpb.ApplyExtensionParamsResponse, error)
 	// RunWorkload tells ateom to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error)
@@ -221,6 +294,9 @@ type AteomServer interface {
 	// workload to object storage, and then completely reset itself to a blank
 	// state (back to "available" state.)
 	CheckpointWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error)
+	// Capture FULL AgentENV state while keeping the source workload running.
+	// The caller supplies an operation-specific checkpoint directory.
+	CaptureWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error)
 	// RestoreWorkload restores a workload from checkpoint that was previously
 	// written by CheckpointWorkload.  Ateom will handle downloading the correct
 	// gVisor / runsc version to match the checkpoint.
@@ -291,11 +367,26 @@ type AteomServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAteomServer struct{}
 
+func (UnimplementedAteomServer) ReadRuntimeInfo(context.Context, *aenvexecutorpb.ReadRuntimeInfoRequest) (*aenvexecutorpb.InspectResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadRuntimeInfo not implemented")
+}
+func (UnimplementedAteomServer) ReadGuestStats(context.Context, *aenvexecutorpb.ReadGuestStatsRequest) (*aenvexecutorpb.StatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadGuestStats not implemented")
+}
+func (UnimplementedAteomServer) ApplyNetworkPolicy(context.Context, *aenvexecutorpb.ApplyNetworkPolicyRequest) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyNetworkPolicy not implemented")
+}
+func (UnimplementedAteomServer) ApplyExtensionParams(context.Context, *aenvexecutorpb.ApplyExtensionParamsRequest) (*aenvexecutorpb.ApplyExtensionParamsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyExtensionParams not implemented")
+}
 func (UnimplementedAteomServer) RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RunWorkload not implemented")
 }
 func (UnimplementedAteomServer) CheckpointWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckpointWorkload not implemented")
+}
+func (UnimplementedAteomServer) CaptureWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CaptureWorkload not implemented")
 }
 func (UnimplementedAteomServer) RestoreWorkload(context.Context, *RestoreWorkloadRequest) (*RestoreWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreWorkload not implemented")
@@ -330,6 +421,78 @@ func RegisterAteomServer(s grpc.ServiceRegistrar, srv AteomServer) {
 	s.RegisterService(&Ateom_ServiceDesc, srv)
 }
 
+func _Ateom_ReadRuntimeInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ReadRuntimeInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).ReadRuntimeInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_ReadRuntimeInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).ReadRuntimeInfo(ctx, req.(*aenvexecutorpb.ReadRuntimeInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Ateom_ReadGuestStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ReadGuestStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).ReadGuestStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_ReadGuestStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).ReadGuestStats(ctx, req.(*aenvexecutorpb.ReadGuestStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Ateom_ApplyNetworkPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ApplyNetworkPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).ApplyNetworkPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_ApplyNetworkPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).ApplyNetworkPolicy(ctx, req.(*aenvexecutorpb.ApplyNetworkPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Ateom_ApplyExtensionParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ApplyExtensionParamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).ApplyExtensionParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_ApplyExtensionParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).ApplyExtensionParams(ctx, req.(*aenvexecutorpb.ApplyExtensionParamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Ateom_RunWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RunWorkloadRequest)
 	if err := dec(in); err != nil {
@@ -362,6 +525,24 @@ func _Ateom_CheckpointWorkload_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AteomServer).CheckpointWorkload(ctx, req.(*CheckpointWorkloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Ateom_CaptureWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckpointWorkloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).CaptureWorkload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_CaptureWorkload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).CaptureWorkload(ctx, req.(*CheckpointWorkloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -446,12 +627,32 @@ var Ateom_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*AteomServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "ReadRuntimeInfo",
+			Handler:    _Ateom_ReadRuntimeInfo_Handler,
+		},
+		{
+			MethodName: "ReadGuestStats",
+			Handler:    _Ateom_ReadGuestStats_Handler,
+		},
+		{
+			MethodName: "ApplyNetworkPolicy",
+			Handler:    _Ateom_ApplyNetworkPolicy_Handler,
+		},
+		{
+			MethodName: "ApplyExtensionParams",
+			Handler:    _Ateom_ApplyExtensionParams_Handler,
+		},
+		{
 			MethodName: "RunWorkload",
 			Handler:    _Ateom_RunWorkload_Handler,
 		},
 		{
 			MethodName: "CheckpointWorkload",
 			Handler:    _Ateom_CheckpointWorkload_Handler,
+		},
+		{
+			MethodName: "CaptureWorkload",
+			Handler:    _Ateom_CaptureWorkload_Handler,
 		},
 		{
 			MethodName: "RestoreWorkload",

@@ -283,6 +283,16 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		return s.deleteTerminalPod(ctx, key, pod)
 	}
 	if !isWorkerEligible(pod) {
+		// AgentENV must learn its authoritative epoch before starting Rust.
+		// Register the identity before readiness; placement remains gated on
+		// the authenticated executor registration for that exact epoch.
+		object, exists, lookupErr := s.workerPoolInformer.GetIndexer().GetByKey(key.namespace + "/" + pod.Labels[workerPodLabel])
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if pool, ok := object.(*atev1alpha1.WorkerPool); exists && ok && canBootstrapAgentENV(pod, pool.Spec.SandboxClass) {
+			return s.createOrUpdateWorker(ctx, key, pod)
+		}
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues
 		// it. A registered Worker still takes a raised epoch: an ateom that is
 		// restarting is not Ready, but its Actors are already lost.
@@ -586,4 +596,16 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 		case <-time.After(backoff.Step()):
 		}
 	}
+}
+
+func canBootstrapAgentENV(pod *corev1.Pod, class atev1alpha1.SandboxClass) bool {
+	if class != atev1alpha1.SandboxClassAgentENV || pod.Status.Phase != corev1.PodRunning || len(pod.Status.PodIPs) == 0 || pod.Spec.NodeName == "" {
+		return false
+	}
+	for _, container := range pod.Status.ContainerStatuses {
+		if container.Name == ateomContainer {
+			return container.State.Running != nil
+		}
+	}
+	return false
 }

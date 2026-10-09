@@ -41,10 +41,11 @@ pub use manifest::{SandboxSnapshotManifest, FIRECRACKER_BACKEND};
 pub use metrics::SandboxMetric;
 pub(crate) use network::{prepare_runtime as prepare_network_runtime, NetworkManager};
 pub use network::{
-    BaseSandboxNetworkPolicy, SandboxNetworkEgressPolicy, SandboxNetworkPolicy,
+    AttachedNetwork, BaseSandboxNetworkPolicy, SandboxNetworkEgressPolicy, SandboxNetworkPolicy,
     ALL_INTERNET_TRAFFIC_CIDR,
 };
 pub use process::{Executor, ProcessHandle, ProcessOpts, ProcessOutput};
+pub(crate) use ublk::UblkCreateSpec;
 pub(crate) use ublk::{compact_layers, OverlaybdCompactOutput};
 pub use ublk::{OverlaybdConfig, UblkBackend, UblkConfig, UblkDaemonConfig, UblkDeviceManager};
 

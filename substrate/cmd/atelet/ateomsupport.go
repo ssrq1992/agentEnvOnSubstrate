@@ -122,17 +122,21 @@ func (s *ateomSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.R
 	if errs := apivalidation.ValidateRegisterWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
-	if _, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
+	registered, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
 		// Workers are global-scoped and named by their pod UID.
-		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity: toWorkerResources(req.GetCapacity()),
-		Hardware: toHardwareIdentity(req.GetHardware()),
-	}); err != nil {
+		Worker:             &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Capacity:           toWorkerResources(req.GetCapacity()),
+		Hardware:           toHardwareIdentity(req.GetHardware()),
+		ProbeOnly:          req.GetProbeOnly(),
+		ExpectedEpoch:      req.GetExpectedEpoch(),
+		ExecutorInstanceId: req.GetExecutorInstanceId(),
+	})
+	if err != nil {
 		return nil, err
 	}
 	slog.InfoContext(ctx, "Registered worker capacity and hardware",
 		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()), slog.Any("hardware", req.GetHardware()))
-	return &ateletpb.RegisterWorkerResponse{}, nil
+	return &ateletpb.RegisterWorkerResponse{WorkerPodUid: workerIdentity.PodUID, WorkerEpoch: registered.GetWorker().GetEpoch(), ExecutorInstanceId: registered.GetWorker().GetStatus().GetExecutorInstanceId()}, nil
 }
 
 // toWorkerResources converts atelet's WorkerResources to the control plane's,

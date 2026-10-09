@@ -63,7 +63,16 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
 
-	if proto.Equal(worker.GetStatus().GetCapacity(), reported) && proto.Equal(worker.GetStatus().GetHardware(), reportedHardware) {
+	if req.GetProbeOnly() {
+		return &ateapipb.RegisterWorkerResponse{Worker: worker}, nil
+	}
+	if err := validateExecutorRegistration(worker, req); err != nil {
+		return nil, err
+	}
+
+	if proto.Equal(worker.GetStatus().GetCapacity(), reported) && proto.Equal(worker.GetStatus().GetHardware(), reportedHardware) &&
+		worker.GetStatus().GetExecutorInstanceId() == req.GetExecutorInstanceId() &&
+		(worker.GetSandboxClass() != "agentenv" || worker.GetStatus().GetRegisteredEpoch() == req.GetExpectedEpoch()) {
 		return &ateapipb.RegisterWorkerResponse{Worker: worker}, nil
 	}
 
@@ -72,6 +81,8 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 		// dimension this report leaves out is one it no longer supplies.
 		toUpdate.Status.Capacity = reported
 		toUpdate.Status.Hardware = reportedHardware
+		toUpdate.Status.ExecutorInstanceId = req.GetExecutorInstanceId()
+		toUpdate.Status.RegisteredEpoch = req.GetExpectedEpoch()
 		return nil
 	})
 	switch {
@@ -89,4 +100,24 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 		slog.String("now", updated.GetStatus().GetCapacity().String()),
 		slog.String("hardware", updated.GetStatus().GetHardware().String()))
 	return &ateapipb.RegisterWorkerResponse{Worker: updated}, nil
+}
+
+// An executor restart inside an unchanged Worker epoch cannot replace the
+// registered owner. The supervisor must terminate the Worker container so the
+// control plane observes and reconciles a new epoch before accepting it.
+func validateExecutorRegistration(worker *ateapipb.Worker, req *ateapipb.RegisterWorkerRequest) error {
+	if worker.GetSandboxClass() != "agentenv" {
+		if req.GetExecutorInstanceId() != "" || req.GetExpectedEpoch() != 0 {
+			return apierror.InvalidArgument("executor registration is only valid for AgentENV workers")
+		}
+		return nil
+	}
+	if req.GetExecutorInstanceId() == "" || req.GetExpectedEpoch() <= 0 || req.GetExpectedEpoch() != worker.GetEpoch() {
+		return apierror.FailedPrecondition("AgentENV registration requires current Worker epoch and executor identity")
+	}
+	status := worker.GetStatus()
+	if status.GetRegisteredEpoch() == worker.GetEpoch() && status.GetExecutorInstanceId() != "" && status.GetExecutorInstanceId() != req.GetExecutorInstanceId() {
+		return apierror.FailedPrecondition("executor replacement requires a new Worker epoch")
+	}
+	return nil
 }

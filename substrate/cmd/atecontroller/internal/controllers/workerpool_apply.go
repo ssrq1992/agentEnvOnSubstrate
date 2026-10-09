@@ -15,7 +15,9 @@
 package controllers
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -144,6 +146,18 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
 	)
 
+	if wp.Spec.SandboxClass == atev1alpha1.SandboxClassAgentENV {
+		limit := int32(1)
+		if wp.Spec.AgentENV != nil && wp.Spec.AgentENV.MaxActors > 0 {
+			limit = wp.Spec.AgentENV.MaxActors
+		}
+		devices := int32(64)
+		if wp.Spec.AgentENV != nil && wp.Spec.AgentENV.MaxDevices > 0 {
+			devices = wp.Spec.AgentENV.MaxDevices
+		}
+		args = append(args, fmt.Sprintf("--max-actors=%d", limit), fmt.Sprintf("--max-devices=%d", devices))
+	}
+
 	containerAC := corev1ac.Container().
 		WithName("ateom").
 		WithImage(wp.Spec.WorkerImage).
@@ -236,6 +250,9 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	applySandboxClassToleration(podSpecAC, wp.Spec.SandboxClass)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
+	if wp.Spec.PodIdentityIssuer != nil {
+		applyPodIdentityIssuer(podSpecAC, containerAC, wp.Spec.PodIdentityIssuer)
+	}
 	podSpecAC.WithContainers(containerAC)
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 
@@ -263,6 +280,52 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithLabels(labels).
 				WithAnnotations(annotations).
 				WithSpec(podSpecAC)))
+}
+
+func applyPodIdentityIssuer(pod *corev1ac.PodSpecApplyConfiguration, worker *corev1ac.ContainerApplyConfiguration, cfg *atev1alpha1.PodIdentityIssuerConfig) {
+	// Replace the projections themselves: leaving either projection in the Pod
+	// would still require experimental kubelet support even if unused.
+	for i := range pod.Volumes {
+		v := &pod.Volumes[i]
+		if v.Name == nil {
+			continue
+		}
+		switch *v.Name {
+		case atunnelIdentityVolume:
+			v.Projected = nil
+			v.EmptyDir = corev1ac.EmptyDirVolumeSource().WithMedium(corev1.StorageMediumMemory)
+		case atunnelEgressTrustVolume:
+			v.Projected = nil
+			v.ConfigMap = corev1ac.ConfigMapVolumeSource().WithName(cfg.TrustConfigMap).WithItems(corev1ac.KeyToPath().WithKey("servicedns-ca.crt").WithPath("trust-bundle.pem"))
+		}
+	}
+	pod.WithVolumes(
+		corev1ac.Volume().WithName("podidentity-token").WithProjected(corev1ac.ProjectedVolumeSource().WithSources(
+			corev1ac.VolumeProjection().WithServiceAccountToken(
+				corev1ac.ServiceAccountTokenProjection().WithAudience("podidentity.ate.dev").WithExpirationSeconds(3600).WithPath("token")),
+		)),
+		corev1ac.Volume().WithName("podidentity-roots").WithConfigMap(corev1ac.ConfigMapVolumeSource().WithName(cfg.TrustConfigMap)),
+	)
+	worker.WithVolumeMounts(corev1ac.VolumeMount().WithName("podidentity-roots").WithMountPath("/run/podidentity-roots").WithReadOnly(true))
+	// Replace the existing argument rather than rely on repeated-flag ordering.
+	worker.Args = slices.DeleteFunc(worker.Args, func(arg string) bool { return strings.HasPrefix(arg, "--atunnel-trust-bundle=") })
+	worker.WithArgs("--atunnel-trust-bundle=/run/podidentity-roots/podidentity-ca.crt")
+	makeAgent := func(name string, once bool) *corev1ac.ContainerApplyConfiguration {
+		c := corev1ac.Container().WithName(name).WithImage(cfg.AgentImage).
+			WithArgs("--issuer="+cfg.Endpoint, "--roots=/run/podidentity-roots/issuer-ca.crt", "--bundle="+atunnelIdentityMountPath+"/credential-bundle.pem").
+			WithVolumeMounts(
+				corev1ac.VolumeMount().WithName(atunnelIdentityVolume).WithMountPath(atunnelIdentityMountPath),
+				corev1ac.VolumeMount().WithName("podidentity-token").WithMountPath("/run/podidentity-token").WithReadOnly(true),
+				corev1ac.VolumeMount().WithName("podidentity-roots").WithMountPath("/run/podidentity-roots").WithReadOnly(true),
+			).
+			WithSecurityContext(corev1ac.SecurityContext().WithAllowPrivilegeEscalation(false).WithReadOnlyRootFilesystem(true).WithCapabilities(corev1ac.Capabilities().WithDrop("ALL")))
+		if once {
+			c.WithArgs("--once")
+		}
+		return c
+	}
+	pod.WithInitContainers(makeAgent("podidentity-init", true))
+	pod.WithContainers(makeAgent("podidentity-renew", false))
 }
 
 // ateomContainerEnv adds the OTLP endpoint and resource identity only when
@@ -368,7 +431,8 @@ var ateomMicroVMCapabilities = slices.Concat(ateomGvisorCapabilities, []corev1.C
 })
 
 // ateomSecurityContext returns the ateom container security context for a sandbox
-// class. Neither class runs privileged; they differ in their capability set.
+// class. gVisor and microvm retain their capability sets; AgentENV uses a
+// privileged device profile and is restricted to explicitly labeled nodes.
 // Both declare seccomp Unconfined because their sandbox child pivot_root()s,
 // which the default profile denies. An empty class defaults to gVisor.
 func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
@@ -386,6 +450,9 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
 
+	if class == atev1alpha1.SandboxClassAgentENV {
+		return sc.WithPrivileged(true).WithSeccompProfile(corev1ac.SeccompProfile().WithType(corev1.SeccompProfileTypeUnconfined))
+	}
 	if class == atev1alpha1.SandboxClassMicroVM {
 		// Give up the default seccomp profile so virtiofsd keeps its own sandbox,
 		// which pivot_root()s — a syscall the profile denies whatever capabilities
@@ -429,6 +496,13 @@ func maybeApplyMicroVMPodShape(
 	containerAC *corev1ac.ContainerApplyConfiguration,
 	sandboxClass atev1alpha1.SandboxClass,
 ) {
+	if sandboxClass == atev1alpha1.SandboxClassAgentENV {
+		podSpecAC.WithNodeSelector(map[string]string{"ate.dev/agentenv-capable": "true"})
+		podSpecAC.WithTolerations(corev1ac.Toleration().WithKey("ate.dev/agentenv").WithOperator(corev1.TolerationOpEqual).WithValue("true").WithEffect(corev1.TaintEffectNoSchedule))
+		podSpecAC.WithVolumes(corev1ac.Volume().WithName("agentenv-devices").WithHostPath(corev1ac.HostPathVolumeSource().WithPath("/dev").WithType(corev1.HostPathDirectory)))
+		containerAC.WithVolumeMounts(corev1ac.VolumeMount().WithName("agentenv-devices").WithMountPath("/dev"))
+		return
+	}
 	if sandboxClass != atev1alpha1.SandboxClassMicroVM {
 		return
 	}

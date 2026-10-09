@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -70,6 +71,9 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 	}
 	var errs field.ErrorList
 	for i, ctr := range value.GetContainers() {
+		if (ctr.GetAgentenvExtensionParams() != "" || ctr.GetAgentenvLaunch() != nil) && value.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_AGENTENV {
+			errs = append(errs, field.Forbidden(fldPath.Child("containers").Index(i).Child("agentenv_extension_params"), "requires AgentENV backend"))
+		}
 		for j, mount := range ctr.GetVolumeMounts() {
 			name := mount.GetName()
 			if name == "" {
@@ -278,4 +282,22 @@ func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, f
 
 func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateCapabilities(fldPath, value, true)
+}
+
+func ValidateCustom_Container_AgentenvExtensionParams(_ context.Context, _ operation.Operation, path *field.Path, value, _ *string) field.ErrorList {
+	if *value == "" {
+		return nil
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(*value), &object) != nil || object == nil {
+		return field.ErrorList{field.Invalid(path, "[redacted]", "must be a JSON object")}
+	}
+	return nil
+}
+
+func ValidateCustom_AgentENVAttachedDrive_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if value == nil {
+		return nil
+	}
+	return validatePinnedImage(fldPath, *value)
 }

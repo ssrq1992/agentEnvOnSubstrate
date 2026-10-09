@@ -50,8 +50,9 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	configMapTrustProvider = pflag.Bool("configmap-trust-provider", false, "Publish egress trust through core/v1 ConfigMaps without ClusterTrustBundle discovery")
+	scheme                 = runtime.NewScheme()
+	setupLog               = ctrl.Log.WithName("setup")
 
 	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "k8s:///api.ate-system.svc:443", "")
 
@@ -223,8 +224,9 @@ func main() {
 	}
 
 	if err = (&controllers.EgressMITMTrustReconciler{
-		Client:          mgr.GetClient(),
-		SystemNamespace: systemNamespace,
+		ConfigMapProvider: *configMapTrustProvider,
+		Client:            mgr.GetClient(),
+		SystemNamespace:   systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EgressMITMTrust")
 		os.Exit(1)

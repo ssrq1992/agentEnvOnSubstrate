@@ -108,6 +108,12 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
 
+	// A failed RPC or a missing Worker record does not prove an embedded VM
+	// stopped. Preserve its assignment until explicit termination succeeds.
+	if actor.GetStatus().GetWorkerAssignment().GetExecutorInstanceId() != "" {
+		return apierror.Unavailable("AgentENV execution requires confirmed termination before crash release")
+	}
+
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 	opName = ateattr.NormalizeOperationName(opName)
 

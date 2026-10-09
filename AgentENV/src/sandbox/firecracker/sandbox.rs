@@ -603,6 +603,11 @@ impl SandboxBackend for FirecrackerSandbox {
     }
 
     async fn update_network_policy(&mut self, policy: Option<SandboxNetworkPolicy>) -> Result<()> {
+        if let Some(network) = self.launch.common().attached_network.as_ref() {
+            network.set_policy(policy.as_ref())?;
+            self.current_network_policy = policy;
+            return Ok(());
+        }
         if let Some(slot) = self.network_slot.as_mut() {
             slot.set_egress_policy(policy.as_ref())
                 .context("configure sandbox network policy")?;
@@ -867,7 +872,7 @@ impl FirecrackerSandbox {
     }
 
     async fn prepare_tools_drive(&mut self) -> Result<()> {
-        if self.tools_ublk_device.is_some() {
+        if self.tools_ublk_device.is_some() || self.launch.common().portable_tools_drive.is_some() {
             return Ok(());
         }
         let config = ConfigManager::global_config();
@@ -1383,6 +1388,8 @@ impl FirecrackerSandbox {
     #[tracing::instrument(skip(self))]
     pub async fn stop(&mut self) -> Result<()> {
         debug!("stopping firecracker sandbox");
+        let strict_cleanup = self.launch.common().attached_network.is_some();
+        let mut cleanup_errors = Vec::new();
 
         let prefetch = self.startup_prefetch_task.take();
         if let Some(task) = prefetch.as_ref() {
@@ -1393,8 +1400,8 @@ impl FirecrackerSandbox {
             .stop(self.runtime_policy.socket_timeout)
             .await;
         if let Err(error) = vm_stop {
-            // If a future Firecracker stop implementation can fail, the VM
-            // may still own its devices. Request reader cleanup, but retain
+            // An unconfirmed Firecracker stop means the VM may still own
+            // its devices. Request reader cleanup, but retain
             // the sandbox/device handles for a later stop attempt.
             if let Some(task) = prefetch {
                 task.stop(self.runtime_policy.socket_timeout).await;
@@ -1416,6 +1423,7 @@ impl FirecrackerSandbox {
                 .await
             {
                 warn!(error = %e, "failed to release ublk device during stop");
+                cleanup_errors.push(format!("failed to release ublk device during stop: {e}"));
             }
         }
 
@@ -1424,12 +1432,18 @@ impl FirecrackerSandbox {
         if let Some(tools_device) = self.tools_ublk_device.take() {
             if let Err(error) = tools_device.release().await {
                 warn!(error = %error, "failed to release shared tools device during stop");
+                cleanup_errors.push(format!(
+                    "failed to release shared tools device during stop: {error}"
+                ));
             }
         }
         // Dedicated pack-recording memory device: delete, never pool-release.
         if let Some(device) = self.mem_dedicated_device.take() {
             if let Err(e) = UblkDeviceManager::global().delete_device(&device).await {
                 warn!(error = %e, "failed to delete dedicated memory ublk device during stop");
+                cleanup_errors.push(format!(
+                    "failed to delete dedicated memory ublk device during stop: {e}"
+                ));
             }
         }
 
@@ -1439,6 +1453,9 @@ impl FirecrackerSandbox {
                 .await
             {
                 warn!(error = %e, "failed to release extra drive device during stop");
+                cleanup_errors.push(format!(
+                    "failed to release extra drive device during stop: {e}"
+                ));
             }
         }
 
@@ -1465,25 +1482,62 @@ impl FirecrackerSandbox {
         // release unrelated resources first. A timed-out reader keeps its own
         // device lease until background cleanup completes.
         if let Some(task) = prefetch {
-            task.stop(self.runtime_policy.socket_timeout).await;
+            if strict_cleanup {
+                if let Err(error) = task
+                    .stop_confirmed(self.runtime_policy.socket_timeout)
+                    .await
+                {
+                    cleanup_errors.push(error.to_string());
+                }
+            } else {
+                task.stop(self.runtime_policy.socket_timeout).await;
+            }
         }
         if let Some(mem_device) = self.mem_ublk_device.take() {
             if let Err(error) = mem_device.release().await {
                 warn!(%error, "failed to release shared memory ublk device during stop");
+                cleanup_errors.push(format!(
+                    "failed to release shared memory ublk device during stop: {error}"
+                ));
             }
         }
         if let Some(error) = network_error {
             return Err(error);
         }
 
+        if strict_cleanup && !cleanup_errors.is_empty() {
+            anyhow::bail!(
+                "embedded device cleanup is unconfirmed: {}",
+                cleanup_errors.join("; ")
+            );
+        }
         debug!("firecracker sandbox stopped");
         Ok(())
     }
 
+    pub(crate) fn current_extension_params(&self) -> Option<&CustomExtensionParams> {
+        self.current_custom_extension_params.as_ref()
+    }
+
+    pub(crate) fn rootfs_bytes(&self) -> u64 {
+        self.current_rootfs_virtual_size.unwrap_or(0)
+    }
+
+    pub(crate) fn envd_version(&self) -> &str {
+        &self.launch.common().envd_version
+    }
+
     pub(crate) fn host_interaction_ip(&self) -> Option<std::net::Ipv4Addr> {
-        self.network_slot
+        self.launch
+            .common()
+            .attached_network
             .as_ref()
-            .map(|slot| slot.host_interaction_ip)
+            .map(|network| network.interaction_ip)
+            .or_else(|| {
+                self.network_slot
+                    .as_ref()
+                    .map(|slot| slot.host_interaction_ip)
+            })
     }
 
     /// Resolve the Firecracker stdout log path (created only when capture is enabled).
@@ -1861,23 +1915,27 @@ impl FirecrackerSandbox {
         }
 
         // ── Allocate network slot and create network infrastructure ──
-        let slot = NetworkManager::global()
-            .allocate_any()
-            .context("Failed to allocate network slot")?;
-        debug!(slot = slot.idx, "allocated network slot");
-        let interaction_ip = slot.host_interaction_ip;
-
-        // Add IP configuration to boot args for the VM.
-        // Uses Slot::build_ip_boot_arg() to produce the kernel ip= parameter with a
-        // valid DNS server IP in the 8th field. See that method for format details.
-        let ip_config = slot.build_ip_boot_arg();
-        let netns = slot.namespace_path();
-        self.network_slot = Some(slot);
-        self.network_slot
-            .as_mut()
-            .expect("network slot was just assigned")
-            .set_egress_policy(config.common.network_policy.as_ref())
-            .context("Failed to configure sandbox egress policy")?;
+        let (interaction_ip, ip_config, netns) =
+            if let Some(network) = &config.common.attached_network {
+                network.set_policy(config.common.network_policy.as_ref())?;
+                (
+                    network.interaction_ip,
+                    network.boot_arg(),
+                    network.netns_path.clone(),
+                )
+            } else {
+                let mut slot = NetworkManager::global()
+                    .allocate_any()
+                    .context("Failed to allocate network slot")?;
+                slot.set_egress_policy(config.common.network_policy.as_ref())?;
+                let result = (
+                    slot.host_interaction_ip,
+                    slot.build_ip_boot_arg(),
+                    slot.namespace_path(),
+                );
+                self.network_slot = Some(slot);
+                result
+            };
         boot_args = Some(match boot_args.take() {
             Some(existing) => format!("{existing} {ip_config}"),
             None => ip_config,
@@ -1910,11 +1968,12 @@ impl FirecrackerSandbox {
         let (stdout_path, stderr_path) = self.firecracker_stdio_paths();
 
         self.fc_instance
-            .spawn_with_netns(
+            .spawn_scoped(
                 &firecracker_binary,
                 stdout_path.as_deref(),
                 stderr_path.as_deref(),
                 Some(&netns),
+                config.common.cgroup_path.as_deref(),
             )
             .await?;
 
@@ -1971,7 +2030,10 @@ impl FirecrackerSandbox {
         self.current_rootfs_virtual_size = Some(rootfs_virtual_size);
 
         let capture_output = logging_enabled(config.common.firecracker_log_level.as_deref());
-        if config.common.stdout_path.is_none() && config.common.stderr_path.is_none() {
+        if config.common.attached_network.is_none()
+            && config.common.stdout_path.is_none()
+            && config.common.stderr_path.is_none()
+        {
             if let Some(warm) =
                 FirecrackerPool::global().and_then(|pool| pool.try_acquire(capture_output))
             {
@@ -2092,7 +2154,20 @@ impl FirecrackerSandbox {
 
         // ── Network + Firecracker spawn ──
         let needs_socket_wait = self.network_slot.is_none();
-        let interaction_ip = if let Some(slot) = self.network_slot.as_ref() {
+        let interaction_ip = if let Some(network) = &config.common.attached_network {
+            network.set_policy(config.common.network_policy.as_ref())?;
+            let (stdout_path, stderr_path) = self.firecracker_stdio_paths();
+            self.fc_instance
+                .spawn_scoped(
+                    &config.common.firecracker_binary,
+                    stdout_path.as_deref(),
+                    stderr_path.as_deref(),
+                    Some(&network.netns_path),
+                    config.common.cgroup_path.as_deref(),
+                )
+                .await?;
+            network.interaction_ip
+        } else if let Some(slot) = self.network_slot.as_ref() {
             slot.host_interaction_ip
         } else {
             let slot = NetworkManager::global()
@@ -2107,11 +2182,12 @@ impl FirecrackerSandbox {
             let (stdout_path, stderr_path) = self.firecracker_stdio_paths();
 
             self.fc_instance
-                .spawn_with_netns(
+                .spawn_scoped(
                     &firecracker_binary,
                     stdout_path.as_deref(),
                     stderr_path.as_deref(),
                     Some(&netns),
+                    config.common.cgroup_path.as_deref(),
                 )
                 .await?;
 
@@ -2127,15 +2203,20 @@ impl FirecrackerSandbox {
         // for them (the extension would see a phantom sandbox start/stop).
         if !config.pack_recording {
             if let Some(client) = CustomExtensionClient::global() {
-                let slot = self
-                    .network_slot
-                    .as_ref()
-                    .context("network slot must be allocated before start-resume hook")?;
+                let (netns, host_ip) = if let Some(network) = &config.common.attached_network {
+                    (network.netns_path.clone(), network.interaction_ip)
+                } else {
+                    let slot = self
+                        .network_slot
+                        .as_ref()
+                        .context("network slot must be allocated before start-resume hook")?;
+                    (slot.namespace_path(), slot.host_interaction_ip)
+                };
                 let mut guard = CustomExtensionHookGuard::new(client, self.id);
                 guard
                     .start_resume(
-                        &slot.namespace_path().to_string_lossy(),
-                        slot.host_interaction_ip,
+                        &netns.to_string_lossy(),
+                        host_ip,
                         config.common.custom_extension_params.as_ref(),
                     )
                     .await?;
@@ -2344,6 +2425,16 @@ impl FirecrackerSandbox {
         Ok(())
     }
 
+    pub(crate) fn tools_drive_source(&self) -> Result<PathBuf> {
+        match &self.tools_ublk_device {
+            Some(device) => Ok(device.device_path().to_path_buf()),
+            None => self
+                .launch
+                .common()
+                .resolved_tools_drive_path(ConfigManager::global_config()),
+        }
+    }
+
     fn link_tools_drive(&self, common: &FirecrackerCommonConfig, work_dir: &Path) -> Result<()> {
         let tools_drive_path = match &self.tools_ublk_device {
             Some(device) => Ok(device.device_path().to_path_buf()),
@@ -2477,10 +2568,20 @@ impl FirecrackerSandbox {
         }
         self.configure_extra_drives(&volume_slots).await?;
 
-        if self.network_slot.is_some() {
+        if self.network_slot.is_some() || config.common.attached_network.is_some() {
             // Network interface.
             self.fc_instance
-                .add_network_interface("eth0", None, "tap0".to_string(), None, None)
+                .add_network_interface(
+                    "eth0",
+                    config
+                        .common
+                        .attached_network
+                        .as_ref()
+                        .map(|net| net.guest_mac.clone()),
+                    "tap0".to_string(),
+                    None,
+                    None,
+                )
                 .await
                 .context("Failed to add network interface to microVM")?;
 

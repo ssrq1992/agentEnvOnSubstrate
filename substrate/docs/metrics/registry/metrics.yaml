@@ -263,6 +263,10 @@ groups:
               stability: development
               value: microvm
               brief: A micro-VM sandbox.
+            - id: agentenv
+              stability: development
+              value: agentenv
+              brief: An AgentENV Firecracker sandbox.
             - id: unknown
               stability: development
               value: unknown

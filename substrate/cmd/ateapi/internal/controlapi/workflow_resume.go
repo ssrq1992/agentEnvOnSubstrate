@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"log/slog"
 	"slices"
 	"time"
@@ -61,7 +62,7 @@ type restoreTelemetry struct {
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent:
 // a re-entered workflow fast-forwards past the steps a previous attempt
 // completed, deriving progress from the persisted actor alone.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, resumed bool, err error) {
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, uid string, sourceURI *string) (_ *ateapipb.Actor, resumed bool, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate
@@ -88,6 +89,22 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if err != nil {
 		return nil, false, err
 	}
+	if sourceURI != nil {
+		switch actor.GetStatus().GetState() {
+		case ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		default:
+			return nil, false, apierror.FailedPrecondition("Actor cannot resume in current state")
+		}
+		if uid == "" {
+			return nil, false, apierror.InvalidArgument("Actor UID required with resume source")
+		}
+		if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != *sourceURI {
+			return nil, false, apierror.FailedPrecondition("resume source checkpoint changed")
+		}
+	}
+	if uid != "" && actor.GetMetadata().GetUid() != uid {
+		return nil, false, apierror.FailedPrecondition("Actor incarnation changed")
+	}
 	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
 		return actor, false, nil
 	}
@@ -103,8 +120,30 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if err != nil {
 		return nil, false, err
 	}
+	if sourceURI != nil {
+		switch actor.GetStatus().GetState() {
+		case ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		default:
+			return nil, false, apierror.FailedPrecondition("Actor cannot resume in current state")
+		}
+		if uid == "" {
+			return nil, false, apierror.InvalidArgument("Actor UID required with resume source")
+		}
+		if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != *sourceURI {
+			return nil, false, apierror.FailedPrecondition("resume source checkpoint changed")
+		}
+	}
+	if uid != "" && actor.GetMetadata().GetUid() != uid {
+		return nil, false, apierror.FailedPrecondition("Actor incarnation changed")
+	}
 	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
 		return actor, false, nil
+	}
+	if actorTemplate.GetSandboxConfig().GetSandboxClass() == ateapipb.SandboxClass_SANDBOX_CLASS_AGENTENV {
+		actor, err = w.syncPolicy(leaseCtx, actor)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	var created *ateapipb.Actor
 	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
@@ -332,6 +371,9 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef.String())
 	}
+	if (worker.GetSandboxClass() == "agentenv" || assignment.GetExecutorInstanceId() != "") && (assignment.GetWorkerEpoch() != worker.GetEpoch() || worker.GetEpoch() != worker.GetStatus().GetObservedEpoch()) {
+		return nil, apierror.FailedPrecondition("assigned worker epoch requires reconciliation before execution")
+	}
 	// Verify the worker is still hosting this Actor.
 	hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
 	if err != nil {
@@ -345,11 +387,23 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
+	if worker.GetSandboxClass() == "agentenv" {
+		claim, err := w.store.GetWorkerAssignment(ctx, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
+		if err != nil {
+			return nil, fmt.Errorf("read AgentENV assignment fence: %w", err)
+		}
+		if assignment.GetAssignmentGeneration() == 0 || assignment.GetAssignmentGeneration() != claim.GetAssignmentGeneration() || claim.GetWorkerEpoch() != assignment.GetWorkerEpoch() || assignment.GetExecutorInstanceId() == "" || assignment.GetExecutorInstanceId() != claim.GetExecutorInstanceId() || assignment.GetExecutorInstanceId() != worker.GetStatus().GetExecutorInstanceId() {
+			return nil, apierror.FailedPrecondition("AgentENV assignment fence differs from persisted worker claim")
+		}
+	}
 	constraints, err := schedulingConstraints(actor, actorTemplate)
 	if err != nil {
 		return nil, err
 	}
 	if !w.scheduler.Applies(worker, constraints) {
+		if worker.GetSandboxClass() == "agentenv" {
+			return nil, apierror.FailedPrecondition("AgentENV assignment requires confirmed termination before changing eligible workers")
+		}
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
@@ -392,10 +446,20 @@ func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *atea
 	}
 
 	// The Actor's allocation makes HasRoom unsuitable for an existing claim.
+	claim, err := w.store.GetWorkerAssignment(ctx, workerName, actorUID)
+	if err != nil {
+		return nil, fmt.Errorf("reading existing assignment: %w", err)
+	}
+	if (worker.GetSandboxClass() == "agentenv" || claim.GetExecutorInstanceId() != "") && (claim.GetWorkerEpoch() != worker.GetEpoch() || worker.GetEpoch() != worker.GetStatus().GetObservedEpoch() || claim.GetExecutorInstanceId() != worker.GetStatus().GetExecutorInstanceId()) {
+		return nil, apierror.FailedPrecondition("existing claim belongs to an unreconciled worker epoch")
+	}
 	if w.scheduler.Applies(worker, constraints) {
 		return worker, nil
 	}
 
+	if worker.GetSandboxClass() == "agentenv" {
+		return nil, apierror.FailedPrecondition("AgentENV claim requires confirmed termination before reassignment")
+	}
 	_, err = w.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
 	if err != nil {
 		return nil, fmt.Errorf("while releasing stale claim on worker %q: %w", workerName, err)
@@ -487,6 +551,8 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// The cached Worker may predate a raised epoch; the bind read it under the
 	// Worker's row lock.
 	newAssignment.WorkerEpoch = assignment.GetWorkerEpoch()
+	newAssignment.AssignmentGeneration = assignment.GetAssignmentGeneration()
+	newAssignment.ExecutorInstanceId = assignment.GetExecutorInstanceId()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
@@ -654,6 +720,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
+			AgentenvPolicy:        nativePolicy(actor.GetStatus().GetAgentenvPolicyDelivery()),
+			Execution:             executionIdentity(actor, "activate", ""),
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
@@ -686,6 +754,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
+			AgentenvPolicy:        nativePolicy(actor.GetStatus().GetAgentenvPolicyDelivery()),
+			Execution:             executionIdentity(actor, "activate", ""),
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
@@ -714,6 +784,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		req := &ateletpb.RunRequest{
+			AgentenvPolicy:        nativePolicy(actor.GetStatus().GetAgentenvPolicyDelivery()),
+			Execution:             executionIdentity(actor, "activate", ""),
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
@@ -752,6 +824,10 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		if d := toUpdate.Status.AgentenvPolicyDelivery; d != nil {
+			d.AppliedRevision = d.Revision
+			d.AppliedAssignment = proto.CloneOf(toUpdate.Status.WorkerAssignment)
+		}
 		return nil
 	})
 	if err != nil {

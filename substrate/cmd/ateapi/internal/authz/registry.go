@@ -210,4 +210,44 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapipb.Control_DeleteActor_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanDelete, r.GetActor(), field.NewPath("actor"))
 	})),
+	// Lifecycle and nested policy operations inherit the parent Actor permission.
+	ateapipb.Control_SuspendActor_FullMethodName: rule(checksOf(func(r *ateapipb.SuspendActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_CaptureActorSnapshot_FullMethodName: rule(checksOf(func(r *ateapipb.CaptureActorSnapshotRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_ResumeActor_FullMethodName: rule(checksOf(func(r *ateapipb.ResumeActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_RevertActor_FullMethodName: rule(checksOf(func(r *ateapipb.RevertActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_GetActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanGet, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_CreateActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_UpdateActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_DeleteActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_GetActorExtensionParams_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorExtensionParamsRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanGet, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_UpdateActorExtensionParams_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateActorExtensionParamsRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_GetActorGuestMetrics_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorGuestMetricsRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanGet, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_ConnectActor_FullMethodName: rule(checksOf(func(r *ateapipb.ConnectActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdate, r.GetActor(), field.NewPath("actor"))
+	})),
 }

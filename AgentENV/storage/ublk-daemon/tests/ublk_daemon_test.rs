@@ -594,12 +594,12 @@ mod client_tests {
     // ── shutdown ────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn shutdown_succeeds_even_without_response() {
+    async fn shutdown_rejects_unconfirmed_cleanup_without_response() {
         let server = MockServer::start_drop_connection().await;
         let client = server.client();
 
-        // shutdown() is best-effort — should succeed even if daemon doesn't respond.
-        client.shutdown().await.unwrap();
+        // A dropped RPC without a successful child exit cannot confirm cleanup.
+        assert!(client.shutdown().await.is_err());
     }
 
     // ── connection error cases ──────────────────────────────────────────

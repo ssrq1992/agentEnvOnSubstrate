@@ -115,7 +115,7 @@ func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateW
 
 // serveFakeAteom serves ateom on a unix socket and points atelet's dialer at
 // it. The socket lives in its own short temp dir.
-func serveFakeAteom(t *testing.T, f *fakeAteom) {
+func serveFakeAteom(t *testing.T, f ateompb.AteomServer) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ateom-")
 	if err != nil {

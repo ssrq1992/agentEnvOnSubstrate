@@ -14,7 +14,7 @@
 
 // Package cgroupstats reads resource usage out of a cgroup v2 directory.
 //
-// The gVisor ateom uses it to answer ateompb.Ateom/GetWorkloadStats: the sentry
+// The gVisor and AgentENV ateoms use it to answer workload stats: each VMM or sentry
 // hosts the whole sandbox in one host process, so the sandbox's cgroup leaf is
 // where the workload's memory and CPU actually show up.
 //

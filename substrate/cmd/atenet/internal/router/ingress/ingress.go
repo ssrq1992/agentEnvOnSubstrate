@@ -59,6 +59,7 @@ const (
 
 // Handler routes ingress requests to the worker hosting their actor.
 type Handler struct {
+	api     ateapipb.ControlClient
 	resumer *ActorResumer
 	parking *parkingLot
 }
@@ -66,6 +67,7 @@ type Handler struct {
 func New(apiClient ateapipb.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
 	lot := newParkingLot(parkCfg, parkMetrics)
 	return &Handler{
+		api:     apiClient,
 		resumer: NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot)),
 		parking: lot,
 	}
@@ -107,7 +109,31 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	}
 
 	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
-	actor, resumeOutcome, err := h.resumer.ResumeActor(ctx, actorRef)
+	var actor *ateapipb.Actor
+	var resumeOutcome ResumeOutcome
+	generationText := md.Header(atenet.TargetGenerationHeader)
+	if generationText != "" {
+		generation, parseErr := strconv.ParseUint(generationText, 10, 64)
+		uid := md.Header(atenet.TargetActorUIDHeader)
+		if parseErr != nil || generation == 0 || uid == "" {
+			return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_BadRequest, "invalid allocation route")
+		}
+		// Compatibility traffic is authenticated before arriving here. Routing must
+		// never wake a paused instance or mutate its timer behind the bridge.
+		actor, err = h.api.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+		if err == nil && (actor.GetMetadata().GetUid() != uid || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || actor.GetStatus().GetWorkerAssignment().GetAssignmentGeneration() != generation) {
+			return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_MisdirectedRequest, "allocation no longer running")
+		}
+		if port := md.Header(atunnel.TargetPortHeader); port != "" {
+			var ok bool
+			targetPort, ok = atunnel.ParsePort(port)
+			if !ok {
+				return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_BadRequest, "invalid target port")
+			}
+		}
+	} else {
+		actor, resumeOutcome, err = h.resumer.ResumeActor(ctx, actorRef)
+	}
 	if err != nil {
 		return extproc.Result{Resume: string(resumeOutcome)}, mapResumeError(actorRef, err)
 	}
@@ -166,6 +192,25 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 	})
 
+	// Never forward a caller-supplied incarnation fence. The resolved UID
+	// prevents a delayed request from reaching a replacement with the same name.
+	if uid := actor.GetMetadata().GetUid(); uid != "" {
+		mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
+			Header:       &corev3.HeaderValue{Key: atenet.TargetActorUIDHeader, RawValue: []byte(uid)},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		})
+	} else {
+		mutation.RemoveHeaders = append(mutation.RemoveHeaders, atenet.TargetActorUIDHeader)
+	}
+
+	if generationText != "" {
+		mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
+			Header:       &corev3.HeaderValue{Key: atenet.TargetGenerationHeader, RawValue: []byte(generationText)},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		})
+	} else {
+		mutation.RemoveHeaders = append(mutation.RemoveHeaders, atenet.TargetGenerationHeader)
+	}
 	res.Target = targetAddr
 	res.Response = &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{

@@ -122,7 +122,10 @@ type ReportConfig struct {
 	// than derived from the downward API.
 	AteletSPIFFEID string
 	// Actors is how many actors this ateom will host at once.
-	Actors int
+	Actors             int
+	ExpectedEpoch      int64
+	ExecutorInstanceID string
+	Capacity           *ateletpb.WorkerResources
 }
 
 // Report tells the node-local atelet what this ateom can supply and its
@@ -133,24 +136,44 @@ type ReportConfig struct {
 // an ateom first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
 func Report(ctx context.Context, cfg ReportConfig) error {
+	_, err := register(ctx, cfg, false)
+	return err
+}
+
+// ProbeIdentity obtains the authenticated Worker epoch without advertising
+// capacity. AgentENV calls it before starting its executor process.
+func ProbeIdentity(ctx context.Context, cfg ReportConfig) (*ateletpb.RegisterWorkerResponse, error) {
+	return register(ctx, cfg, true)
+}
+
+func register(ctx context.Context, cfg ReportConfig, probe bool) (*ateletpb.RegisterWorkerResponse, error) {
 	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
-		return fmt.Errorf("capacity report: %w", err)
+		return nil, fmt.Errorf("capacity report: %w", err)
 	}
 	req := &ateletpb.RegisterWorkerRequest{
-		Capacity: FromFiles(cfg.Actors),
-		Hardware: probeHardware(),
+		Capacity:           FromFiles(cfg.Actors),
+		Hardware:           probeHardware(),
+		ProbeOnly:          probe,
+		ExpectedEpoch:      cfg.ExpectedEpoch,
+		ExecutorInstanceId: cfg.ExecutorInstanceID,
 	}
+	if cfg.Capacity != nil {
+		req.Capacity = cfg.Capacity
+	}
+	var result *ateletpb.RegisterWorkerResponse
 	err = retryReport(ctx, func() error {
-		return reportOnce(ctx, cfg.SocketPath, tlsConfig, req)
+		var callErr error
+		result, callErr = reportOnce(ctx, cfg.SocketPath, tlsConfig, req)
+		return callErr
 	}, initialReportBackoff)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	slog.InfoContext(ctx, "Registered worker capacity and hardware",
 		slog.Any("capacity", req.GetCapacity()),
 		slog.Any("hardware", req.GetHardware()))
-	return nil
+	return result, nil
 }
 
 // retryReport calls send until it succeeds or ctx ends, backing off between
@@ -172,14 +195,13 @@ func retryReport(ctx context.Context, send func() error, backoff time.Duration) 
 	}
 }
 
-func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, req *ateletpb.RegisterWorkerRequest) error {
+func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	conn, err := ateletdial.Dial(socketPath, tlsConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer conn.Close()
 	callCtx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateletpb.NewAteomSupportClient(conn).RegisterWorker(callCtx, req)
-	return err
+	return ateletpb.NewAteomSupportClient(conn).RegisterWorker(callCtx, req)
 }

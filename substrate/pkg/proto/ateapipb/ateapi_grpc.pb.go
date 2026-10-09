@@ -34,6 +34,10 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	Control_GetActor_FullMethodName                   = "/ateapi.Control/GetActor"
+	Control_GetActorExtensionParams_FullMethodName    = "/ateapi.Control/GetActorExtensionParams"
+	Control_UpdateActorExtensionParams_FullMethodName = "/ateapi.Control/UpdateActorExtensionParams"
+	Control_GetActorGuestMetrics_FullMethodName       = "/ateapi.Control/GetActorGuestMetrics"
+	Control_ConnectActor_FullMethodName               = "/ateapi.Control/ConnectActor"
 	Control_CreateActor_FullMethodName                = "/ateapi.Control/CreateActor"
 	Control_UpdateActor_FullMethodName                = "/ateapi.Control/UpdateActor"
 	Control_SuspendActor_FullMethodName               = "/ateapi.Control/SuspendActor"
@@ -48,6 +52,7 @@ const (
 	Control_MintActorJWT_FullMethodName               = "/ateapi.Control/MintActorJWT"
 	Control_MintActorCertificate_FullMethodName       = "/ateapi.Control/MintActorCertificate"
 	Control_CreateTag_FullMethodName                  = "/ateapi.Control/CreateTag"
+	Control_CaptureActorSnapshot_FullMethodName       = "/ateapi.Control/CaptureActorSnapshot"
 	Control_GetTag_FullMethodName                     = "/ateapi.Control/GetTag"
 	Control_ListTags_FullMethodName                   = "/ateapi.Control/ListTags"
 	Control_UpdateTag_FullMethodName                  = "/ateapi.Control/UpdateTag"
@@ -85,6 +90,13 @@ const (
 type ControlClient interface {
 	// Get an Actor.
 	GetActor(ctx context.Context, in *GetActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Return the current AgentENV runtime credential for an already running Actor.
+	// Requires Actor update permission. Does not resume or create an Actor.
+	// Read current guest measurements for a running AgentENV Actor.
+	GetActorExtensionParams(ctx context.Context, in *GetActorExtensionParamsRequest, opts ...grpc.CallOption) (*ActorExtensionParams, error)
+	UpdateActorExtensionParams(ctx context.Context, in *UpdateActorExtensionParamsRequest, opts ...grpc.CallOption) (*ActorExtensionParams, error)
+	GetActorGuestMetrics(ctx context.Context, in *GetActorGuestMetricsRequest, opts ...grpc.CallOption) (*GetActorGuestMetricsResponse, error)
+	ConnectActor(ctx context.Context, in *ConnectActorRequest, opts ...grpc.CallOption) (*ConnectActorResponse, error)
 	// Create a new Actor deriving from a given ActorTemplate.
 	CreateActor(ctx context.Context, in *CreateActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Update mutable fields on an existing Actor.
@@ -126,6 +138,8 @@ type ControlClient interface {
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it.
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
+	// Capture a FULL snapshot while keeping the source Actor running.
+	CaptureActorSnapshot(ctx context.Context, in *CaptureActorSnapshotRequest, opts ...grpc.CallOption) (*Tag, error)
 	// Get a Tag.
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// List Tags.
@@ -203,6 +217,46 @@ func (c *controlClient) GetActor(ctx context.Context, in *GetActorRequest, opts 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Actor)
 	err := c.cc.Invoke(ctx, Control_GetActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetActorExtensionParams(ctx context.Context, in *GetActorExtensionParamsRequest, opts ...grpc.CallOption) (*ActorExtensionParams, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorExtensionParams)
+	err := c.cc.Invoke(ctx, Control_GetActorExtensionParams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateActorExtensionParams(ctx context.Context, in *UpdateActorExtensionParamsRequest, opts ...grpc.CallOption) (*ActorExtensionParams, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorExtensionParams)
+	err := c.cc.Invoke(ctx, Control_UpdateActorExtensionParams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetActorGuestMetrics(ctx context.Context, in *GetActorGuestMetricsRequest, opts ...grpc.CallOption) (*GetActorGuestMetricsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetActorGuestMetricsResponse)
+	err := c.cc.Invoke(ctx, Control_GetActorGuestMetrics_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ConnectActor(ctx context.Context, in *ConnectActorRequest, opts ...grpc.CallOption) (*ConnectActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConnectActorResponse)
+	err := c.cc.Invoke(ctx, Control_ConnectActor_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +397,16 @@ func (c *controlClient) CreateTag(ctx context.Context, in *CreateTagRequest, opt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Tag)
 	err := c.cc.Invoke(ctx, Control_CreateTag_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) CaptureActorSnapshot(ctx context.Context, in *CaptureActorSnapshotRequest, opts ...grpc.CallOption) (*Tag, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Tag)
+	err := c.cc.Invoke(ctx, Control_CaptureActorSnapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -627,6 +691,13 @@ func (c *controlClient) DeleteAtespaceAccessPolicy(ctx context.Context, in *Dele
 type ControlServer interface {
 	// Get an Actor.
 	GetActor(context.Context, *GetActorRequest) (*Actor, error)
+	// Return the current AgentENV runtime credential for an already running Actor.
+	// Requires Actor update permission. Does not resume or create an Actor.
+	// Read current guest measurements for a running AgentENV Actor.
+	GetActorExtensionParams(context.Context, *GetActorExtensionParamsRequest) (*ActorExtensionParams, error)
+	UpdateActorExtensionParams(context.Context, *UpdateActorExtensionParamsRequest) (*ActorExtensionParams, error)
+	GetActorGuestMetrics(context.Context, *GetActorGuestMetricsRequest) (*GetActorGuestMetricsResponse, error)
+	ConnectActor(context.Context, *ConnectActorRequest) (*ConnectActorResponse, error)
 	// Create a new Actor deriving from a given ActorTemplate.
 	CreateActor(context.Context, *CreateActorRequest) (*Actor, error)
 	// Update mutable fields on an existing Actor.
@@ -668,6 +739,8 @@ type ControlServer interface {
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it.
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
+	// Capture a FULL snapshot while keeping the source Actor running.
+	CaptureActorSnapshot(context.Context, *CaptureActorSnapshotRequest) (*Tag, error)
 	// Get a Tag.
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
 	// List Tags.
@@ -744,6 +817,18 @@ type UnimplementedControlServer struct{}
 func (UnimplementedControlServer) GetActor(context.Context, *GetActorRequest) (*Actor, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActor not implemented")
 }
+func (UnimplementedControlServer) GetActorExtensionParams(context.Context, *GetActorExtensionParamsRequest) (*ActorExtensionParams, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActorExtensionParams not implemented")
+}
+func (UnimplementedControlServer) UpdateActorExtensionParams(context.Context, *UpdateActorExtensionParamsRequest) (*ActorExtensionParams, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateActorExtensionParams not implemented")
+}
+func (UnimplementedControlServer) GetActorGuestMetrics(context.Context, *GetActorGuestMetricsRequest) (*GetActorGuestMetricsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActorGuestMetrics not implemented")
+}
+func (UnimplementedControlServer) ConnectActor(context.Context, *ConnectActorRequest) (*ConnectActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConnectActor not implemented")
+}
 func (UnimplementedControlServer) CreateActor(context.Context, *CreateActorRequest) (*Actor, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateActor not implemented")
 }
@@ -785,6 +870,9 @@ func (UnimplementedControlServer) MintActorCertificate(context.Context, *MintAct
 }
 func (UnimplementedControlServer) CreateTag(context.Context, *CreateTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateTag not implemented")
+}
+func (UnimplementedControlServer) CaptureActorSnapshot(context.Context, *CaptureActorSnapshotRequest) (*Tag, error) {
+	return nil, status.Error(codes.Unimplemented, "method CaptureActorSnapshot not implemented")
 }
 func (UnimplementedControlServer) GetTag(context.Context, *GetTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTag not implemented")
@@ -902,6 +990,78 @@ func _Control_GetActor_Handler(srv interface{}, ctx context.Context, dec func(in
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).GetActor(ctx, req.(*GetActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetActorExtensionParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActorExtensionParamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetActorExtensionParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetActorExtensionParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetActorExtensionParams(ctx, req.(*GetActorExtensionParamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateActorExtensionParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateActorExtensionParamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateActorExtensionParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateActorExtensionParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateActorExtensionParams(ctx, req.(*UpdateActorExtensionParamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetActorGuestMetrics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActorGuestMetricsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetActorGuestMetrics(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetActorGuestMetrics_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetActorGuestMetrics(ctx, req.(*GetActorGuestMetricsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ConnectActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConnectActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ConnectActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ConnectActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ConnectActor(ctx, req.(*ConnectActorRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1154,6 +1314,24 @@ func _Control_CreateTag_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).CreateTag(ctx, req.(*CreateTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CaptureActorSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CaptureActorSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CaptureActorSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CaptureActorSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CaptureActorSnapshot(ctx, req.(*CaptureActorSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1656,6 +1834,22 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_GetActor_Handler,
 		},
 		{
+			MethodName: "GetActorExtensionParams",
+			Handler:    _Control_GetActorExtensionParams_Handler,
+		},
+		{
+			MethodName: "UpdateActorExtensionParams",
+			Handler:    _Control_UpdateActorExtensionParams_Handler,
+		},
+		{
+			MethodName: "GetActorGuestMetrics",
+			Handler:    _Control_GetActorGuestMetrics_Handler,
+		},
+		{
+			MethodName: "ConnectActor",
+			Handler:    _Control_ConnectActor_Handler,
+		},
+		{
 			MethodName: "CreateActor",
 			Handler:    _Control_CreateActor_Handler,
 		},
@@ -1710,6 +1904,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateTag",
 			Handler:    _Control_CreateTag_Handler,
+		},
+		{
+			MethodName: "CaptureActorSnapshot",
+			Handler:    _Control_CaptureActorSnapshot_Handler,
 		},
 		{
 			MethodName: "GetTag",

@@ -56,7 +56,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 		}
 		return nil, err
 	}
-	return tag, nil
+	return publicTag(tag), nil
 }
 
 func (s *ServiceImpl) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error) {
@@ -76,7 +76,7 @@ func (s *RPCService) GetTag(ctx context.Context, req *ateapipb.GetTagRequest) (*
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
-	return tag, nil
+	return publicTag(tag), nil
 }
 
 func (s *ServiceImpl) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
@@ -91,6 +91,9 @@ func (s *RPCService) ListTags(ctx context.Context, req *ateapipb.ListTagsRequest
 	page, err := s.impl.ListTags(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing tags: %w", err))
+	}
+	for i, tag := range page.Items {
+		page.Items[i] = publicTag(tag)
 	}
 	return &ateapipb.ListTagsResponse{Tags: page.Items, NextPageToken: page.NextPageToken}, nil
 }
@@ -163,7 +166,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 		}
 		return nil, fmt.Errorf("while updating tag: %w", err)
 	}
-	return storedTag, nil
+	return publicTag(storedTag), nil
 }
 
 func (s *ServiceImpl) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error) {
@@ -189,10 +192,24 @@ func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagReque
 	if errs := apivalidation.ValidateDeleteTagRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()), toDeletePreconditions(req.GetOptions()))
+	tag, err := s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()), toDeletePreconditions(req.GetOptions()))
+	return publicTag(tag), err
 }
 
 func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	// TODO: implement this
 	return s.store.DeleteTag(ctx, tagRef, precondition)
+}
+
+// Execution payloads may contain launch secrets. Keep the persisted intent
+// private even when a caller is permitted to read or publish the Tag.
+func publicTag(tag *ateapipb.Tag) *ateapipb.Tag {
+	if tag == nil {
+		return nil
+	}
+	tag = proto.CloneOf(tag)
+	if tag.Status != nil {
+		tag.Status.CaptureRequest = nil
+	}
+	return tag
 }

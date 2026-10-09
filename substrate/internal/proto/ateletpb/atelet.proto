@@ -14,6 +14,9 @@
 
 syntax = "proto3";
 
+import "executor.proto";
+import "ateapi.proto";
+
 package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
@@ -57,6 +60,16 @@ message RegisterWorkerRequest {
   //
   // +k8s:required
   HardwareIdentity hardware = 2;
+  // Authenticated identity probe; does not advertise capacity.
+  // +k8s:optional
+  bool probe_only = 3;
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 expected_epoch = 4;
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string executor_instance_id = 5;
+
 }
 
 // HardwareIdentity identifies the hardware properties of a worker. It mirrors
@@ -116,6 +129,10 @@ message Limits {
 }
 
 message RegisterWorkerResponse {
+  string worker_pod_uid = 1;
+  int64 worker_epoch = 2;
+  string executor_instance_id = 3;
+
 }
 
 message RequestActorSuspendRequest {
@@ -178,6 +195,16 @@ message MintActorCertificateResponse {
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
 service AteomHerder {
+  // AgentENV guest measurements, distinct from host cgroup consumption.
+  rpc ReadGuestStats(agentenv.executor.v1.ReadGuestStatsRequest) returns (agentenv.executor.v1.StatsResponse) {}
+  // AgentENV-only live policy mutation; success confirms the exact revision.
+  rpc ApplyNetworkPolicy(agentenv.executor.v1.ApplyNetworkPolicyRequest) returns (agentenv.executor.v1.ApplyNetworkPolicyResponse) {}
+  rpc ReadRuntimeInfo(agentenv.executor.v1.ReadRuntimeInfoRequest) returns (agentenv.executor.v1.InspectResponse) {}
+  rpc ApplyExtensionParams(agentenv.executor.v1.ApplyExtensionParamsRequest) returns (agentenv.executor.v1.ApplyExtensionParamsResponse) {}
+
+  // Read the allocation-local envd credential after checking its full fence.
+  rpc ReadAgentENVConnection(ReadAgentENVConnectionRequest) returns (ReadAgentENVConnectionResponse) {}
+
   // Run tells atelet to create a new containerized workload from scratch on an
   // ateom.
   rpc Run(RunRequest) returns (RunResponse) {}
@@ -186,6 +213,9 @@ service AteomHerder {
   // ateom to object storage, and then completely the ateom to a blank state
   // (back to "available" state.)
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
+
+  // Upload a FULL AgentENV capture without stopping or releasing its source.
+  rpc Capture(CheckpointRequest) returns (CheckpointResponse) {}
 
   // Restore restores a workload from checkpoint onto an ateom.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
@@ -202,6 +232,8 @@ service AteomHerder {
 }
 
 message TerminateRequest {
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 8;
   // If unset, the atelet will just cleanup node resources for the actor.
   string target_ateom_uid = 1;
 
@@ -219,6 +251,12 @@ message TerminateResponse {
 }
 
 message RunRequest {
+  // Persisted AgentENV policy for cold boot or explicit restore override.
+  // Absent on restore preserves the captured policy.
+  // +k8s:opaqueType
+  agentenv.executor.v1.NetworkPolicy agentenv_policy = 13;
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 12;
   string target_ateom_uid = 1;
 
   string atespace = 2;
@@ -379,6 +417,10 @@ message Container {
   // resources are the cgroup limits for this container, resolved by
   // ate-api-server from the ActorTemplate. Unset means no limits.
   ResourceLimits resources = 9;
+  string agentenv_extension_params = 10 [debug_redact = true];
+  // Public control-plane validators check the typed launch description.
+  // +k8s:opaqueType
+  ateapi.AgentENVLaunchConfig agentenv_launch = 11;
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -472,6 +514,8 @@ message ExternalRestoreConfiguration {
 }
 
 message CheckpointRequest {
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 12;
   string target_ateom_uid = 1;
 
   string atespace = 2;
@@ -529,6 +573,12 @@ message UploadPausedCheckpointResponse {
 }
 
 message RestoreRequest {
+  // Persisted AgentENV policy for cold boot or explicit restore override.
+  // Absent on restore preserves the captured policy.
+  // +k8s:opaqueType
+  agentenv.executor.v1.NetworkPolicy agentenv_policy = 18;
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 17;
   string target_ateom_uid = 1;
 
   string atespace = 2;
@@ -567,4 +617,16 @@ message RestoreRequest {
 }
 
 message RestoreResponse {
+}
+
+message ReadAgentENVConnectionRequest {
+  string actor_uid = 1;
+  string target_ateom_uid = 2;
+  // +k8s:opaqueType
+  agentenv.executor.v1.LifecycleOperation execution = 3;
+}
+message ReadAgentENVConnectionResponse {
+  string envd_access_token = 1 [ debug_redact = true ];
+  string envd_version = 2;
+  uint64 rootfs_bytes = 3;
 }

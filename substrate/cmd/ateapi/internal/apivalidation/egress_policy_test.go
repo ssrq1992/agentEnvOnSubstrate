@@ -1012,3 +1012,30 @@ func TestHeaderNameValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentENVPolicyValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy *ateapipb.AgentENVNetworkPolicy
+		valid  bool
+	}{
+		{"default", &ateapipb.AgentENVNetworkPolicy{}, true},
+		{"rules", &ateapipb.AgentENVNetworkPolicy{Base: ateapipb.AgentENVNetworkPolicy_DENY, AllowOut: []string{"*.Example.COM", "1.1.1.1", "10.0.0.0/8"}, DenyOut: []string{"0.0.0.0/0"}}, true},
+		{"unknown base", &ateapipb.AgentENVNetworkPolicy{Base: 99}, false},
+		{"IPv6", &ateapipb.AgentENVNetworkPolicy{DenyOut: []string{"::/0"}}, false},
+		{"domain without deny all", &ateapipb.AgentENVNetworkPolicy{AllowOut: []string{"example.com"}}, false},
+		{"deny domain", &ateapipb.AgentENVNetworkPolicy{DenyOut: []string{"example.com"}}, false},
+		{"invalid CIDR", &ateapipb.AgentENVNetworkPolicy{AllowOut: []string{"10.0.0.0/99"}}, false},
+		{"invalid wildcard", &ateapipb.AgentENVNetworkPolicy{AllowOut: []string{"a.*.com"}}, false},
+		{"IP zone", &ateapipb.AgentENVNetworkPolicy{AllowOut: []string{"fe80::1%eth0"}}, false},
+		{"empty rule", &ateapipb.AgentENVNetworkPolicy{AllowOut: []string{""}}, false},
+		{"label length", &ateapipb.AgentENVNetworkPolicy{AllowOut: []string{strings.Repeat("a", 64) + ".com"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &ateapipb.CreateActorEgressPolicyRequest{Actor: &ateapipb.ObjectRef{Atespace: "space", Name: "actor"}, EgressPolicy: &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Atespace: "space", Name: "default"}, Agentenv: tc.policy}}
+			if errs := ValidateCreateActorEgressPolicyRequest(t.Context(), req); (len(errs) == 0) != tc.valid {
+				t.Fatalf("valid=%v errors=%v", tc.valid, errs)
+			}
+		})
+	}
+}

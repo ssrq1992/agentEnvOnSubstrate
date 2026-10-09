@@ -87,10 +87,11 @@ type Server struct {
 type activation struct {
 	ref resources.ActorRef
 	// Distinguishes incarnations of an actor that reuse its name.
-	uid    string
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	uid        string
+	generation uint64
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 
 	// Connects through the actor's namespace.
 	dial DialFunc
@@ -183,6 +184,8 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 			port := pr.In.Header.Get(TargetPortHeader)
 			pr.Out.Header.Del(TargetPortHeader)
 			pr.Out.Header.Del(atenet.TargetActorHeader)
+			pr.Out.Header.Del(atenet.TargetActorUIDHeader)
+			pr.Out.Header.Del(atenet.TargetGenerationHeader)
 			if p, ok := ParsePort(port); ok {
 				pr.Out.URL.Host = net.JoinHostPort(upstream.Hostname(), strconv.Itoa(p))
 			}
@@ -430,6 +433,11 @@ func (w flushingWriter) Write(p []byte) (int, error) {
 // Requests are routed by name, so an older incarnation still active under the
 // same name is replaced.
 func (s *Server) Activate(atespace, actorName, actorUID string, dial DialFunc) error {
+	return s.ActivateAssignment(atespace, actorName, actorUID, 0, dial)
+}
+
+// ActivateAssignment binds ingress to a control-plane allocation generation.
+func (s *Server) ActivateAssignment(atespace, actorName, actorUID string, generation uint64, dial DialFunc) error {
 	if !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(actorName) {
 		return fmt.Errorf("atunnel: invalid actor reference %q/%q", atespace, actorName)
 	}
@@ -450,12 +458,13 @@ func (s *Server) Activate(atespace, actorName, actorUID string, dial DialFunc) e
 	ctx, cancel := context.WithCancel(context.Background())
 	dial = activationDialer(ctx, dial)
 	s.active[ref] = &activation{
-		ref:    ref,
-		uid:    actorUID,
-		ctx:    ctx,
-		cancel: cancel,
-		dial:   dial,
-		proxy:  s.newProxy(dial),
+		ref:        ref,
+		uid:        actorUID,
+		generation: generation,
+		ctx:        ctx,
+		cancel:     cancel,
+		dial:       dial,
+		proxy:      s.newProxy(dial),
 	}
 	return nil
 }
@@ -528,6 +537,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
+	_ = http.NewResponseController(w).EnableFullDuplex()
 	active.proxy.ServeHTTP(w, r.WithContext(requestCtx))
 }
 
@@ -539,9 +549,18 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 
 	s.mu.Lock()
 	active, ok := s.active[ref]
-	if !ok {
+	uids := r.Header.Values(atenet.TargetActorUIDHeader)
+	if !ok || len(uids) > 1 || (len(uids) == 1 && (uids[0] == "" || uids[0] != active.uid)) {
 		s.mu.Unlock()
 		return nil, nil, nil, false
+	}
+	values := r.Header.Values(atenet.TargetGenerationHeader)
+	if len(values) > 0 {
+		generation, err := strconv.ParseUint(values[0], 10, 64)
+		if len(values) != 1 || err != nil || generation == 0 || generation != active.generation || len(uids) != 1 {
+			s.mu.Unlock()
+			return nil, nil, nil, false
+		}
 	}
 	active.wg.Add(1)
 	s.mu.Unlock()

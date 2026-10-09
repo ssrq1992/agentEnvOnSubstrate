@@ -29,6 +29,11 @@ use crate::protocol::{
 };
 use crate::runtime;
 
+// Startup rollback can lose its device handle before insertion into a map.
+// Retain uncertainty for this daemon lifetime so graceful exit cannot turn
+// that orphan into a successful cleanup receipt.
+static UNCONFIRMED_DEVICE_CLEANUP: AtomicBool = AtomicBool::new(false);
+
 // ── Managed device wrapper ──────────────────────────────────────────────────
 
 struct ManagedDevice {
@@ -150,6 +155,8 @@ struct PoolState {
     /// Coalesces asynchronous pool refill work so concurrent acquire/release
     /// requests do not all synchronously create replacement ublk devices.
     refill_inflight: AtomicBool,
+    stopping: AtomicBool,
+    cleanup_failed: AtomicBool,
     config: PoolConfig,
     /// Ublk feature flags detected at startup.
     features: u64,
@@ -178,6 +185,8 @@ impl PoolState {
             shared_by_dev_id: DashMap::new(),
             image_locks: DashMap::new(),
             refill_inflight: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
+            cleanup_failed: AtomicBool::new(false),
             config,
             features,
             placeholders: Mutex::new(HashMap::new()),
@@ -403,11 +412,9 @@ impl UblkDaemonServer {
         );
         signal_ready()?;
 
-        // Note: spawned connection handlers may outlive the accept loop when
-        // shutdown fires. This is acceptable — DashMap operations are individually
-        // atomic, so a concurrent handle_delete and stop_all_devices on the same
-        // device ID will race on `devices.remove()`, and only one will get the
-        // device while the other silently skips it. No data corruption is possible.
+        // Drain requests before enumerating devices: a concurrent create could
+        // otherwise publish a device after shutdown had taken its snapshot.
+        let mut connections = tokio::task::JoinSet::new();
         loop {
             tokio::select! {
                 accept = listener.accept() => {
@@ -422,7 +429,7 @@ impl UblkDaemonServer {
                     let pack_recordings = Arc::clone(&self.pack_recordings);
                     let startup_pack_handles = Arc::clone(&self.startup_pack_handles);
                     let shutdown = Arc::clone(&self.shutdown);
-                    tokio::spawn(async move {
+                    connections.spawn(async move {
                         if let Err(err) = handle_connection(
                             stream,
                             devices,
@@ -444,11 +451,26 @@ impl UblkDaemonServer {
                     tracing::info!("ublk daemon shutdown requested");
                     break;
                 }
+                result = connections.join_next(), if !connections.is_empty() => {
+                    result.context("missing daemon connection task")??;
+                }
             }
         }
 
+        if let Some(pool) = &self.pool_state {
+            pool.stopping.store(true, Ordering::Release);
+        }
+        drop(listener);
+        while let Some(result) = connections.join_next().await {
+            result.context("drain daemon connection")?;
+        }
+        if let Some(pool) = &self.pool_state {
+            while pool.refill_inflight.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
         // Graceful cleanup: stop all devices.
-        self.stop_all_devices().await;
+        self.stop_all_devices().await?;
 
         // Remove socket file.
         let _ = std::fs::remove_file(&self.socket_path);
@@ -461,7 +483,8 @@ impl UblkDaemonServer {
         self.shutdown.notify_one();
     }
 
-    async fn stop_all_devices(&self) {
+    async fn stop_all_devices(&self) -> Result<()> {
+        let mut failures = Vec::new();
         // Abort pack recordings first so a window task cannot finalize into a
         // device that is being stopped, and no tmp pack files survive.
         let recording_ids: Vec<u32> = self.pack_recordings.iter().map(|r| *r.key()).collect();
@@ -481,11 +504,17 @@ impl UblkDaemonServer {
                 drop(device);
                 if let Err(err) = delete_dev(self.ctrl_ring.clone(), dev_id).await {
                     tracing::warn!(dev_id, ?err, "failed to stop device during shutdown");
+                    failures.push(format!("device {dev_id}: {err}"));
+                } else if let Err(err) = crate::device_ledger::released(dev_id) {
+                    failures.push(format!("device ledger {dev_id}: {err}"));
                 }
             }
         }
 
         if let Some(pool) = &self.pool_state {
+            if pool.cleanup_failed.load(Ordering::Acquire) {
+                failures.push("an earlier pooled device deletion was unconfirmed".into());
+            }
             let exclusive_ids: Vec<u32> = pool
                 .active_exclusive
                 .iter()
@@ -493,7 +522,11 @@ impl UblkDaemonServer {
                 .collect();
             for dev_id in exclusive_ids {
                 if let Some((_, active)) = pool.active_exclusive.remove(&dev_id) {
-                    stop_overlaybd_device(self.ctrl_ring.clone(), active.dev).await;
+                    if let Err(err) =
+                        stop_overlaybd_device_checked(self.ctrl_ring.clone(), active.dev).await
+                    {
+                        failures.push(format!("device {dev_id}: {err}"));
+                    }
                 }
             }
 
@@ -505,15 +538,31 @@ impl UblkDaemonServer {
             for key in shared_keys {
                 if let Some((_, active)) = pool.active_shared.remove(&key) {
                     pool.shared_by_dev_id.remove(&active.dev.dev_id());
-                    stop_overlaybd_device(self.ctrl_ring.clone(), active.dev).await;
+                    if let Err(err) =
+                        stop_overlaybd_device_checked(self.ctrl_ring.clone(), active.dev).await
+                    {
+                        failures.push(format!("shared device: {err}"));
+                    }
                 }
             }
 
             let idle_devices: Vec<PooledDevice> = pool.idle.drain_all();
             for pooled in idle_devices {
-                stop_overlaybd_device(self.ctrl_ring.clone(), pooled.dev).await;
+                if let Err(err) =
+                    stop_overlaybd_device_checked(self.ctrl_ring.clone(), pooled.dev).await
+                {
+                    failures.push(format!("idle device: {err}"));
+                }
             }
         }
+        if !failures.is_empty() {
+            bail!("device shutdown incomplete: {}", failures.join("; "));
+        }
+        if UNCONFIRMED_DEVICE_CLEANUP.load(Ordering::Acquire) {
+            bail!("device startup rollback was unconfirmed; node fencing is required");
+        }
+        crate::device_ledger::ensure_empty()?;
+        Ok(())
     }
 }
 
@@ -873,7 +922,9 @@ async fn create_overlaybd_device(
         .build(ctrl_ring.clone())
         .context("build ublk ctrl")?;
 
+    let reservation = crate::device_ledger::reserve(image_config)?;
     let mut dev = UVMUblkDevBuilder::new(ctrl)
+        .on_allocated(move |id| reservation.allocated(id))
         .set_target(target)
         .build()
         .await
@@ -930,6 +981,7 @@ async fn handle_delete(
     delete_dev(ctrl_ring, dev_id)
         .await
         .with_context(|| format!("delete ublk device {dev_id}"))?;
+    crate::device_ledger::released(dev_id)?;
     tracing::info!(dev_id, "device deleted");
 
     Ok(DaemonResponse::Deleted)
@@ -1267,6 +1319,9 @@ async fn cleanup_failed_ublk_start<T: UVMUblkTarget>(
         {
             tracing::info!(dev_id, "ublk device disappeared before startup cleanup");
             drop(dev);
+            if crate::device_ledger::released(dev_id).is_err() {
+                UNCONFIRMED_DEVICE_CLEANUP.store(true, Ordering::Release);
+            }
             return;
         }
         Err(err) => {
@@ -1291,6 +1346,7 @@ async fn cleanup_failed_ublk_start<T: UVMUblkTarget>(
     let mut ctrl = match UVMUblkCtrlBuilder::new().dev_id(dev_id).build(ctrl_ring) {
         Ok(ctrl) => ctrl,
         Err(err) => {
+            UNCONFIRMED_DEVICE_CLEANUP.store(true, Ordering::Release);
             tracing::warn!(
                 dev_id,
                 ?err,
@@ -1302,6 +1358,9 @@ async fn cleanup_failed_ublk_start<T: UVMUblkTarget>(
 
     match ctrl.del_dev().await {
         Ok(()) => {
+            if crate::device_ledger::released(dev_id).is_err() {
+                UNCONFIRMED_DEVICE_CLEANUP.store(true, Ordering::Release);
+            }
             tracing::info!(dev_id, "deleted ublk device after startup failure");
         }
         Err(err)
@@ -1312,9 +1371,13 @@ async fn cleanup_failed_ublk_start<T: UVMUblkTarget>(
                 Some(libc::ENODEV)
             ) =>
         {
+            if crate::device_ledger::released(dev_id).is_err() {
+                UNCONFIRMED_DEVICE_CLEANUP.store(true, Ordering::Release);
+            }
             tracing::info!(dev_id, "ublk device already deleted after startup failure");
         }
         Err(err) => {
+            UNCONFIRMED_DEVICE_CLEANUP.store(true, Ordering::Release);
             tracing::warn!(
                 dev_id,
                 ?err,
@@ -1325,20 +1388,29 @@ async fn cleanup_failed_ublk_start<T: UVMUblkTarget>(
 }
 
 async fn stop_overlaybd_device(
+    pool: &PoolState,
+    ctrl_ring: IoRingHandle<io_uring::squeue::Entry128>,
+    dev: UVMUblkDev<OverlaybdTarget>,
+) {
+    let dev_id = dev.dev_id();
+    if let Err(err) = stop_overlaybd_device_checked(ctrl_ring, dev).await {
+        pool.cleanup_failed.store(true, Ordering::Release);
+        tracing::warn!(dev_id, ?err, "failed to stop pooled overlaybd device");
+    }
+}
+
+async fn stop_overlaybd_device_checked(
     ctrl_ring: IoRingHandle<io_uring::squeue::Entry128>,
     mut dev: UVMUblkDev<OverlaybdTarget>,
-) {
+) -> Result<()> {
     let dev_id = dev.dev_id();
     tracing::info!(dev_id, "stopping pooled overlaybd device during shutdown");
     quiesce_ublk_device(&mut dev).await;
     drop(dev);
-    if let Err(err) = delete_dev(ctrl_ring, dev_id).await {
-        tracing::warn!(
-            dev_id,
-            ?err,
-            "failed to stop pooled overlaybd device during shutdown"
-        );
-    }
+    delete_dev(ctrl_ring, dev_id)
+        .await
+        .context("delete pooled overlaybd device")?;
+    crate::device_ledger::released(dev_id)
 }
 
 async fn handle_restack_snapshot(
@@ -1596,7 +1668,7 @@ async fn acquire_shared(
 
             // Do not idle a redundant business-image device.
             drop(image);
-            stop_overlaybd_device(ctrl_ring, dev).await;
+            stop_overlaybd_device(&pool, ctrl_ring, dev).await;
             tracing::info!(
                 dev_id = existing_dev_id,
                 refcount,
@@ -1715,7 +1787,7 @@ async fn idle_released_device(
                 "failed to build pool placeholder; deleting device instead of idling business image"
             );
             drop(business_image);
-            stop_overlaybd_device(ctrl_ring, dev).await;
+            stop_overlaybd_device(pool, ctrl_ring, dev).await;
             return;
         }
     };
@@ -1734,7 +1806,7 @@ async fn idle_released_device(
             "failed to swap device to pool placeholder; deleting device instead of idling business image"
         );
         drop(business_image);
-        stop_overlaybd_device(ctrl_ring, dev).await;
+        stop_overlaybd_device(pool, ctrl_ring, dev).await;
         return;
     }
 
@@ -1827,6 +1899,9 @@ fn schedule_idle_pool_refill(
     ctrl_ring: IoRingHandle<io_uring::squeue::Entry128>,
     virtual_size: u64,
 ) {
+    if pool.stopping.load(Ordering::Acquire) {
+        return;
+    }
     if pool
         .refill_inflight
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1836,6 +1911,10 @@ fn schedule_idle_pool_refill(
     }
 
     tokio::spawn(async move {
+        if pool.stopping.load(Ordering::Acquire) {
+            pool.refill_inflight.store(false, Ordering::Release);
+            return;
+        }
         refill_idle_pool_best_effort(&pool, ctrl_ring.clone(), virtual_size).await;
         pool.refill_inflight.store(false, Ordering::Release);
 
@@ -1910,7 +1989,7 @@ async fn stop_excess_idle_device(
         high_watermark = pool.idle.config().high_watermark,
         "idle overlaybd pool is full; stopping returned device"
     );
-    stop_overlaybd_device(ctrl_ring, pooled.dev).await;
+    stop_overlaybd_device(pool, ctrl_ring, pooled.dev).await;
 }
 
 /// Detect ublk features by sending GET_FEATURES through the ublk control ring.
@@ -1964,7 +2043,9 @@ async fn create_new_device(
         .build(ctrl_ring.clone())
         .context("build ublk ctrl")?;
 
+    let reservation = crate::device_ledger::reserve(image_config)?;
     let mut dev = UVMUblkDevBuilder::new(ctrl)
+        .on_allocated(move |id| reservation.allocated(id))
         .set_target(target)
         .build()
         .await

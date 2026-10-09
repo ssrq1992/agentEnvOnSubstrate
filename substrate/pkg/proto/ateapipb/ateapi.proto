@@ -25,6 +25,14 @@ service Control {
   // Get an Actor.
   rpc GetActor(GetActorRequest) returns (Actor) {}
 
+  // Return the current AgentENV runtime credential for an already running Actor.
+  // Requires Actor update permission. Does not resume or create an Actor.
+  // Read current guest measurements for a running AgentENV Actor.
+  rpc GetActorExtensionParams(GetActorExtensionParamsRequest) returns (ActorExtensionParams) {}
+  rpc UpdateActorExtensionParams(UpdateActorExtensionParamsRequest) returns (ActorExtensionParams) {}
+  rpc GetActorGuestMetrics(GetActorGuestMetricsRequest) returns (GetActorGuestMetricsResponse) {}
+  rpc ConnectActor(ConnectActorRequest) returns (ConnectActorResponse) {}
+
   // Create a new Actor deriving from a given ActorTemplate.
   rpc CreateActor(CreateActorRequest) returns (Actor) {}
 
@@ -79,6 +87,8 @@ service Control {
   // copy of that snapshot, so suspending or deleting the Actor afterwards
   // cannot collect it.
   rpc CreateTag(CreateTagRequest) returns (Tag) {}
+  // Capture a FULL snapshot while keeping the source Actor running.
+  rpc CaptureActorSnapshot(CaptureActorSnapshotRequest) returns (Tag) {}
 
   // Get a Tag.
   rpc GetTag(GetTagRequest) returns (Tag) {}
@@ -401,6 +411,13 @@ message Actor {
   // +k8s:immutable
   ObjectRef source_tag = 6;
 
+  // Optional incarnation precondition for source_tag. Frozen with the Actor;
+  // prevents a deleted and recreated tag from silently changing a fork source.
+  // +k8s:optional
+  // +k8s:immutable
+  // +k8s:format=k8s-uuid
+  string source_tag_uid = 8;
+
   // status is the system-managed state of the Actor. It is updated by the
   // server and ignored on input. It is always present in output.
   //
@@ -411,6 +428,7 @@ message Actor {
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
 // at most one egress policy resource, named "default".
 //
+// +k8s:customValidation # AgentENV and gateway policies are mutually exclusive
 message EgressPolicy {
   // Standard resource metadata. Atespace must match the parent Actor and name
   // must be "default". Both are caller-specified on create and immutable.
@@ -443,6 +461,53 @@ message EgressPolicy {
   // +k8s:listType=atomic
   // +k8s:customValidation # no two rules tie on a name and port
   repeated EgressRule rules = 2;
+
+  // AgentENV uses its VM namespace policy engine instead of gateway rules.
+  // +k8s:optional
+  AgentENVNetworkPolicy agentenv = 3;
+
+  // Server-derived delivery state. Ignored on input; a stored policy is not
+  // proof that an active assignment has acknowledged its revision.
+  // +k8s:optional
+  AgentENVPolicyDelivery agentenv_delivery = 4;
+}
+
+message AgentENVNetworkPolicy {
+  enum Base { DEFAULT = 0; ALLOW = 1; DENY = 2; }
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=2
+  Base base = 1;
+  // IP addresses, CIDRs or DNS names with an optional leading '*.'.
+  // +k8s:optional
+  // +k8s:maxItems=1024
+  // +k8s:listType=atomic
+  repeated string allow_out = 2;
+  // IP addresses or CIDRs only. Platform denies remain absolute.
+  // +k8s:optional
+  // +k8s:maxItems=1024
+  // +k8s:listType=atomic
+  repeated string deny_out = 3;
+}
+
+// Durable projection of a policy mutation onto an Actor lifecycle. The
+// revision remains monotonic across policy deletion/recreation and restores.
+message AgentENVPolicyDelivery {
+  // +k8s:optional
+  uint64 revision = 1;
+  // +k8s:optional
+  AgentENVNetworkPolicy policy = 2;
+  // +k8s:optional
+  string policy_uid = 3;
+  // +k8s:optional
+  int64 policy_version = 4;
+  // +k8s:optional
+  uint64 applied_revision = 5;
+  // +k8s:optional
+  WorkerAssignment applied_assignment = 6;
+  // A deletion applies Default before releasing the policy resource.
+  // +k8s:optional
+  bool deleting = 7;
 }
 
 // EgressRule allows traffic for a given protocol and destination (host name
@@ -759,6 +824,13 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:format=k8s-long-name
   string assigned_node = 10;
+
+  // +k8s:optional
+  AgentENVPolicyDelivery agentenv_policy_delivery = 11;
+
+  // Approved runtime parameters and the durable in-flight update receipt.
+  // +k8s:optional
+  AgentENVExtensionDelivery agentenv_extension_delivery = 12;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -839,6 +911,17 @@ message WorkerAssignment {
   // +k8s:optional
   // +k8s:minimum=0
   int64 worker_epoch = 8;
+
+  // Durable allocation generation assigned by the store. Retries retain it;
+  // a new allocation receives a larger generation, including across Workers.
+  // +k8s:optional
+  // +k8s:minimum=0
+  uint64 assignment_generation = 9;
+  // Executor identity stamped by the store when binding the Actor.
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string executor_instance_id = 10;
+
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -867,6 +950,17 @@ message TagStatus {
   // +k8s:required
   // +k8s:maxLength=1024
   string storage_location = 3;
+
+  // Source incarnation and allocation frozen for an online capture retry.
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string capture_actor_uid = 4;
+  // +k8s:optional
+  WorkerAssignment capture_assignment = 5;
+  // Server-owned frozen execution payload; never accepted from clients.
+  // +k8s:optional
+  // +k8s:maxBytes=1048576
+  bytes capture_request = 6 [debug_redact = true];
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
@@ -937,6 +1031,8 @@ enum SandboxClass {
   SANDBOX_CLASS_UNSPECIFIED = 0;
   SANDBOX_CLASS_GVISOR = 1;
   SANDBOX_CLASS_MICROVM = 2;
+  // AgentENV / Firecracker with Worker-local ublk storage.
+  SANDBOX_CLASS_AGENTENV = 3;
   // Keep this in sync with SandboxConfig.sandbox_class's maximum.
 }
 
@@ -1040,7 +1136,7 @@ message SandboxConfig {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SandboxClass enum
+  // +k8s:maximum=3 # keep this in sync with the SandboxClass enum
   SandboxClass sandbox_class = 1;
 
   // config_name names the cluster-scoped SandboxConfig Kubernetes object
@@ -1145,6 +1241,53 @@ message Container {
   //
   // +k8s:optional
   Resources resources = 9;
+
+  // Initial AgentENV extension hook parameters. Empty preserves defaults.
+  // +k8s:optional
+  // +k8s:maxLength=65536
+  // +k8s:customValidation # JSON object, native backend only
+  string agentenv_extension_params = 10 [debug_redact = true];
+
+  // Native AgentENV cold-launch storage and boot configuration.
+  // +k8s:optional
+  AgentENVLaunchConfig agentenv_launch = 11;
+}
+
+message AgentENVLaunchConfig {
+  // Zero uses the source image size.
+  // +k8s:optional
+  uint64 rootfs_bytes = 1;
+  // Runtime applies its configured kernel argument allowlist.
+  // +k8s:optional
+  // +k8s:maxLength=4096
+  string extra_boot_args = 2;
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=id
+  repeated AgentENVAttachedDrive drives = 3;
+}
+
+message AgentENVAttachedDrive {
+  // +k8s:required
+  // +k8s:maxLength=128
+  string id = 1;
+  // +k8s:required
+  // +k8s:maxLength=512
+  // +k8s:customValidation # requires pinned OCI digest
+  string image = 2;
+  // +k8s:required
+  // +k8s:maxLength=4096
+  string mount_path = 3;
+  // +k8s:optional
+  bool read_only = 4;
+  // Zero lets the runtime resolve source image size.
+  // +k8s:optional
+  uint64 virtual_size = 5;
+  // Relative path within the drive; empty mounts its root.
+  // +k8s:optional
+  // +k8s:maxLength=4096
+  string sub_path = 6;
 }
 
 // SecurityContext holds security settings for a container's process,
@@ -1535,6 +1678,26 @@ message GetActorRequest {
   ObjectRef actor = 1;
 }
 
+// ConnectActor binds a credential lookup to an exact Actor incarnation.
+message ConnectActorRequest {
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+  // +k8s:required
+  // +k8s:maxLength=128
+  string uid = 2;
+}
+
+message ConnectActorResponse {
+  Actor actor = 1;
+  // Secret scoped to this running allocation; never persist in compatibility metadata.
+  string envd_access_token = 2 [ debug_redact = true ];
+  // Version from the current runtime configuration, including restored assets.
+  string envd_version = 3;
+  // Actual root disk capacity reported by the running backend.
+  uint64 rootfs_bytes = 4;
+}
+
 // Request to create a new Actor.
 message CreateActorRequest {
   // The actor to create.
@@ -1563,6 +1726,17 @@ message SuspendActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // If set, the operation applies only to this Actor incarnation. Checked
+  // under the lifecycle lease before any runtime or storage mutation.
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string uid = 2;
+  // Fence the running allocation that may be suspended. Requires uid.
+  // Already SUSPENDED is idempotent; a later running allocation is rejected.
+  // +k8s:optional
+  optional uint64 assignment_generation = 3;
+
 }
 
 message SuspendActorResponse {
@@ -1583,6 +1757,18 @@ message ResumeActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // If set, the operation applies only to this Actor incarnation. Checked
+  // under the lifecycle lease before any runtime or storage mutation.
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string uid = 2;
+  // Optional source fence. Requires uid; an empty value means cold activation.
+  // A delayed resume must not activate a newer suspended checkpoint.
+  // +k8s:optional
+  // +k8s:maxLength=4096
+  optional string source_snapshot_uri = 3;
+
 }
 
 message ResumeActorResponse {
@@ -1633,10 +1819,28 @@ message GetActorEgressPolicyRequest {
   ObjectRef actor = 1;
 }
 
+// Preconditions for the native AgentENV lifecycle lease. These are rejected
+// for gateway policies; they cannot be silently ignored by another backend.
+message AgentENVPolicyPreconditions {
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string actor_uid = 1;
+  // SDK live updates require RUNNING; native control clients may stage while suspended.
+  // +k8s:optional
+  bool require_running = 2;
+  // Optional durable optimistic policy revision, including zero before first use.
+  // A stale request may only acknowledge an already identical desired policy.
+  // +k8s:optional
+  optional uint64 expected_policy_revision = 3;
+}
+
 // CreateActorEgressPolicyRequest creates an egress policy for an Actor.
 //
 // +k8s:customValidation # atespaces must match
 message CreateActorEgressPolicyRequest {
+  // +k8s:optional
+  AgentENVPolicyPreconditions agentenv_preconditions = 3;
+
   // Parent Actor under which to create the policy resource.
   //
   // +k8s:required
@@ -1654,6 +1858,9 @@ message CreateActorEgressPolicyRequest {
 //
 // +k8s:customValidation
 message UpdateActorEgressPolicyRequest {
+  // +k8s:optional
+  AgentENVPolicyPreconditions agentenv_preconditions = 3;
+
   // Parent Actor under which to update the policy resource.
   //
   // +k8s:required
@@ -1669,6 +1876,9 @@ message UpdateActorEgressPolicyRequest {
 
 // DeleteActorEgressPolicyRequest identifies an Actor's egress policy.
 message DeleteActorEgressPolicyRequest {
+  // +k8s:optional
+  AgentENVPolicyPreconditions agentenv_preconditions = 3;
+
   // The parent Actor of the egress policy resource to delete.
   //
   // +k8s:required
@@ -2147,6 +2357,14 @@ message WorkerStatus {
   //
   // +k8s:optional
   HardwareIdentity hardware = 5;
+  // Executor process identity accepted for registered_epoch.
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string executor_instance_id = 6;
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 registered_epoch = 7;
+
 }
 
 // HardwareIdentity identifies the hardware of a Worker or the Worker a
@@ -2220,6 +2438,17 @@ message ActorAssignment {
   // +k8s:optional
   // +k8s:minimum=0
   int64 worker_epoch = 7;
+
+  // Store-assigned monotonic allocation generation, independent of mutable
+  // metadata.version. Never replaced when the same claim is retried.
+  // +k8s:optional
+  // +k8s:minimum=0
+  uint64 assignment_generation = 8;
+  // Executor identity stamped by the store when binding the Actor.
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string executor_instance_id = 9;
+
 }
 
 // WorkerService is how a Worker tells the control plane what it observes. It is
@@ -2287,6 +2516,16 @@ message RegisterWorkerRequest {
   //
   // +k8s:required
   HardwareIdentity hardware = 3;
+  // Probe returns authenticated Worker state without changing registration.
+  // +k8s:optional
+  bool probe_only = 4;
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 expected_epoch = 5;
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string executor_instance_id = 6;
+
 }
 
 message RegisterWorkerResponse {
@@ -2472,4 +2711,95 @@ message DeleteAtespaceAccessPolicyRequest {
   //
   // +k8s:optional
   DeleteOptions options = 2;
+}
+
+// GetActorGuestMetrics reads guest measurements under the lifecycle lease.
+message GetActorGuestMetricsRequest {
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+  // +k8s:required
+  // +k8s:maxLength=128
+  string uid = 2;
+}
+
+// Instantaneous envd values, not cumulative CPU time or host cgroup accounting.
+message GetActorGuestMetricsResponse {
+  string actor_uid = 1;
+  WorkerAssignment assignment = 2;
+  int64 observed_at_unix_millis = 3;
+  uint64 memory_used_bytes = 4;
+  uint64 memory_total_bytes = 5;
+  uint64 memory_cache_bytes = 6;
+  float cpu_used_percent = 7;
+  uint64 disk_used_bytes = 8;
+  uint64 disk_total_bytes = 9;
+  uint32 cpu_count = 10;
+}
+
+// Capture destination names are idempotency keys within the Actor atespace.
+message CaptureActorSnapshotRequest {
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string uid = 2;
+  // +k8s:required
+  // +k8s:minimum=1
+  uint64 assignment_generation = 3;
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:format=k8s-long-name
+  string tag_name = 4;
+}
+
+// Extension parameters are the complete object approved by the extension hook.
+message ActorExtensionParams {
+  uint64 revision = 1;
+  // +debug_redact
+  string json = 2 [debug_redact = true];
+}
+
+// Frozen execution intent is retained until the original allocation acknowledges it.
+message AgentENVExtensionDelivery {
+  ActorExtensionParams approved = 1;
+  // +k8s:optional
+  UpdateActorExtensionParamsRequest pending = 2;
+  // +k8s:optional
+  WorkerAssignment pending_assignment = 3;
+  // +k8s:optional
+  UpdateActorExtensionParamsRequest last_request = 4;
+  ActorExtensionParams last_result = 5;
+  bool last_rejected = 6;
+}
+
+message GetActorExtensionParamsRequest {
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string uid = 2;
+}
+
+message UpdateActorExtensionParamsRequest {
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string uid = 2;
+  // +k8s:required
+  // +k8s:minimum=1
+  uint64 assignment_generation = 3;
+  // +k8s:required
+  // +k8s:maxLength=200
+  string operation_id = 4;
+  uint64 expected_revision = 5;
+  // The patch is forwarded verbatim; only hook-approved parameters are stored.
+  // +k8s:required
+  // +k8s:maxLength=65536
+  // +debug_redact
+  string patch_json = 6 [debug_redact = true];
 }

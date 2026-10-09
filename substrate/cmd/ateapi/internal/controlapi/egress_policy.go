@@ -34,6 +34,7 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 	// defaults so validation sees the final resource state.
 	policy := req.GetEgressPolicy()
 	if policy != nil {
+		policy.AgentenvDelivery = nil
 		scrubResourceMetadataForCreate(policy.Metadata)
 		defaults.Apply(policy)
 	}
@@ -41,10 +42,33 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	if policy.GetAgentenv() != nil {
+		return s.actorWorkflow.mutateAgentENVPolicy(ctx, actorRef, policy, true, req.AgentenvPreconditions)
+	}
+	if req.AgentenvPreconditions != nil {
+		return nil, apierror.InvalidArgument("AgentENV preconditions require a native policy")
+	}
 	return s.impl.CreateEgressPolicy(ctx, actorRef, policy)
 }
 
 func (s *ServiceImpl) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+	actor, err := s.store.GetActor(ctx, actorRef)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, apierror.FailedPrecondition("parent Actor does not exist")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if actor.GetActorTemplate() != nil {
+		template, err := resolveActorTemplate(ctx, s.store, actor)
+		if err != nil {
+			return nil, err
+		}
+		native := template.GetSandboxConfig().GetSandboxClass() == ateapipb.SandboxClass_SANDBOX_CLASS_AGENTENV
+		if native != (policy.GetAgentenv() != nil) {
+			return nil, apierror.FailedPrecondition("egress policy backend does not match Actor")
+		}
+	}
 	created, err := s.store.CreateEgressPolicy(ctx, actorRef, policy)
 	return mapEgressPolicyWrite(created, err)
 }
@@ -54,7 +78,23 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.Get
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	ref := resources.ActorRefFromObjectRef(req.GetActor())
+	policy, err := s.impl.GetEgressPolicy(ctx, ref)
+	if err != nil || policy.GetAgentenv() == nil {
+		return policy, err
+	}
+	actor, err := s.impl.GetActor(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	policy = proto.CloneOf(policy)
+	delivery := actor.GetStatus().GetAgentenvPolicyDelivery()
+	if delivery.GetPolicyUid() == policy.GetMetadata().GetUid() && delivery.GetPolicyVersion() == policy.GetMetadata().GetVersion() {
+		policy.AgentenvDelivery = proto.CloneOf(delivery)
+	} else {
+		policy.AgentenvDelivery = nil
+	}
+	return policy, nil
 }
 
 func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
@@ -71,12 +111,19 @@ func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.Ac
 func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	policy := req.GetEgressPolicy()
 	if policy != nil {
+		policy.AgentenvDelivery = nil
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := apivalidation.ValidateUpdateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	if policy.GetAgentenv() != nil {
+		return s.actorWorkflow.mutateAgentENVPolicy(ctx, actorRef, policy, false, req.AgentenvPreconditions)
+	}
+	if req.AgentenvPreconditions != nil {
+		return nil, apierror.InvalidArgument("AgentENV preconditions require a native policy")
+	}
 	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapipb.EgressPolicy) error {
 		metadata := toUpdate.GetMetadata()
 		proto.Reset(toUpdate)
@@ -103,11 +150,25 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 }
 
 func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+	if req.GetAgentenvPreconditions() != nil && req.GetAgentenvPreconditions().ExpectedPolicyRevision != nil {
+		return nil, apierror.InvalidArgument("expected policy revision applies to create/update only")
+	}
 	if errs := apivalidation.ValidateDeleteActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
+	ref := resources.ActorRefFromObjectRef(req.GetActor())
+	policy, err := s.impl.GetEgressPolicy(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if policy.GetAgentenv() != nil {
+		return s.actorWorkflow.deleteAgentENVPolicy(ctx, ref, toDeletePreconditions(req.GetOptions()), req.AgentenvPreconditions)
+	}
+	if req.AgentenvPreconditions != nil {
+		return nil, apierror.InvalidArgument("AgentENV preconditions require a native policy")
+	}
+	return s.impl.DeleteEgressPolicy(ctx, ref, toDeletePreconditions(req.GetOptions()))
 }
 
 func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {

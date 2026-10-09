@@ -221,6 +221,12 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
 		return false
 	}
+	if worker.GetSandboxClass() == "agentenv" && worker.GetEpoch() != worker.GetStatus().GetObservedEpoch() {
+		return false
+	}
+	if worker.GetSandboxClass() == "agentenv" && (worker.GetEpoch() <= 0 || worker.GetStatus().GetRegisteredEpoch() != worker.GetEpoch() || worker.GetStatus().GetExecutorInstanceId() == "") {
+		return false
+	}
 
 	set := labels.Set(worker.GetLabels())
 	if constraints.TemplateSelector != nil && !constraints.TemplateSelector.Matches(set) {

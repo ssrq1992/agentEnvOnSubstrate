@@ -436,6 +436,36 @@ func TestApplies(t *testing.T) {
 	}
 }
 
+func TestEpochReconciliationGatesPlacement(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		class           string
+		epoch, observed int64
+		want            bool
+	}{
+		{"old actors not reconciled", "agentenv", 3, 2, false},
+		{"inconsistent future observation", "agentenv", 2, 3, false},
+		{"unregistered agentenv", "agentenv", 0, 0, false},
+		{"registered agentenv", "agentenv", 3, 3, true},
+		{"original backend during restart", "gvisor", 3, 2, true},
+		{"original backend no epoch", "gvisor", 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := worker("w", tc.class, "node", nil)
+			w.Epoch = tc.epoch
+			w.Status.ObservedEpoch = tc.observed
+			if tc.name == "registered agentenv" {
+				w.Status.RegisteredEpoch = tc.epoch
+				w.Status.ExecutorInstanceId = "executor"
+			}
+			s := New(fleet{w})
+			if got := s.Applies(w, Constraints{SandboxClass: tc.class}); got != tc.want {
+				t.Fatalf("Applies = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 type fleet []*ateapipb.Worker
 
 func (f fleet) Workers() ([]*ateapipb.Worker, error) { return f, nil }

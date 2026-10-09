@@ -97,13 +97,8 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // delete run again rediscovers the work from it and resumes over whatever is
 // left.
 //
-// The tag stays resolvable while its snapshot is being collected, so a
-// CreateActor racing this delete can seed an Actor from content that is going
-// away. That race is accepted for now.
-//
-// Note that this destroys the external snapshot: an Actor created from the tag
-// and never suspended is still borrowing it and becomes unrecoverable. Do not
-// delete a tag while clones of it exist.
+// The tag lease also protects Actor creation. Deletion refuses to collect a
+// snapshot still borrowed by an Actor, including Actors in another atespace.
 func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
@@ -125,10 +120,41 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 		}
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
+	if err := w.ensureTagUnborrowed(ctx, tag); err != nil {
+		return nil, err
+	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
 		return nil, err
 	}
 	return w.finalizeTagDeleted(ctx, tagRef, precondition)
+}
+
+// ensureTagUnborrowed is called while holding the tag lease. A failed listing
+// must stop collection; an incomplete view cannot establish that deletion is safe.
+func (w *ActorWorkflow) ensureTagUnborrowed(ctx context.Context, tag *ateapipb.Tag) error {
+	if tag.GetStatus().GetCaptureActorUid() != "" && tag.GetStatus().GetSnapshot() == nil {
+		return apierror.FailedPrecondition("online capture outcome must be resolved before deleting its destination")
+	}
+	uri, err := resources.NewTagSnapshotURI(tag.GetStatus().GetStorageLocation(), tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetUid())
+	if err != nil {
+		return err
+	}
+	opts := store.ListOptions{PageSize: 1000}
+	for {
+		page, err := w.store.ListActors(ctx, "", opts)
+		if err != nil {
+			return fmt.Errorf("while checking tag snapshot borrowers: %w", err)
+		}
+		for _, actor := range page.Items {
+			if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() == uri.String() {
+				return apierror.FailedPrecondition("Tag snapshot is still referenced by Actor %s", resources.ActorRefFromActor(actor))
+			}
+		}
+		if page.NextPageToken == "" {
+			return nil
+		}
+		opts.PageToken = page.NextPageToken
+	}
 }
 
 // loadTagForDelete fetches the row the delete works from. The row records where

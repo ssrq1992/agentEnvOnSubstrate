@@ -27,6 +27,12 @@ const (
 	// "<atespace>/<actor>". HTTP field names are case-insensitive; this uses its
 	// HTTP/2 wire form so dataplane configuration and metadata are native.
 	TargetActorHeader = "ate-target-actor"
+
+	// TargetActorUIDHeader binds a resolved route to one actor incarnation.
+	// The router overwrites client input with the control-plane UID.
+	TargetActorUIDHeader = "ate-target-actor-uid"
+	// TargetGenerationHeader selects a running allocation without resuming it.
+	TargetGenerationHeader = "ate-target-assignment-generation"
 )
 
 // ParseTargetActor parses and validates a TargetActorHeader value.

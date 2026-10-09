@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/agent-substrate/substrate/internal/aenvexecutor"
+	aenvexecutorpb "github.com/agent-substrate/substrate/internal/proto/aenvexecutorpb"
 	"log/slog"
 	"net"
 	"os"
@@ -86,8 +88,9 @@ import (
 )
 
 var (
-	port              = pflag.Int("port", atelet.DefaultPort, "The port to listen on")
-	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	egressTrustBundleFile = pflag.String("egress-trust-bundle-file", "", "ConfigMap-projected egress trust bundle; bypasses ClusterTrustBundle discovery when set")
+	port                  = pflag.Int("port", atelet.DefaultPort, "The port to listen on")
+	metricsListenAddr     = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
@@ -284,28 +287,46 @@ func main() {
 
 	csiDriverConfigGetter := &directCSIDriverConfigGetter{client: ateClient}
 
-	trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
-		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", trustbundle.EgressCTB).String()
-	})
-	if err != nil {
-		slog.ErrorContext(ctx, "Error discovering ClusterTrustBundle API", slog.Any("err", err))
-		os.Exit(1)
-	}
-
 	// Read system roots from the known location in the distroless-static base image.
 	systemRootsPEM, err := os.ReadFile("/etc/ssl/certs/ca-certificates.crt")
 	if err != nil {
 		serverboot.Fatal(ctx, "Error reading system root certificates", err)
 	}
 
-	trustBundleSource := trustbundle.NewSource(trustBundles.GetCached, systemRootsPEM)
-
-	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundleSource, trustBundles.Informer())
-
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	go trustBundles.Informer().Run(stopCh)
-	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
+	var systemInfoVolumes *systemInfoVolumeRefresher
+	if *egressTrustBundleFile != "" {
+		source := trustbundle.NewFileSource(*egressTrustBundleFile, systemRootsPEM)
+		if _, err := source.Combined([]string{trustbundle.EgressName}); err != nil {
+			serverboot.Fatal(ctx, "Error reading projected egress trust bundle", err)
+		}
+		systemInfoVolumes = newSystemInfoVolumeRefresher(source, nil)
+		go func() {
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					systemInfoVolumes.queue.Add(trustbundle.EgressName)
+				}
+			}
+		}()
+	} else {
+		trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
+			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", trustbundle.EgressCTB).String()
+		})
+		if err != nil {
+			serverboot.Fatal(ctx, "Error discovering ClusterTrustBundle API", err)
+		}
+		systemInfoVolumes = newSystemInfoVolumeRefresher(trustbundle.NewSource(trustBundles.GetCached, systemRootsPEM), trustBundles.Informer())
+		go trustBundles.Informer().Run(stopCh)
+		if !cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced) {
+			return
+		}
+	}
 
 	wmService := NewService(
 		ctx,
@@ -502,6 +523,9 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	if err := validateRunRequest(req); err != nil {
 		return nil, apierror.InvalidArgument("%v", err)
 	}
+	if req.GetSandboxAssets().GetSandboxClass() == "agentenv" {
+		return s.runAgentENV(ctx, req)
+	}
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
@@ -559,6 +583,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
 	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
+		Execution:             req.GetExecution(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -623,6 +648,16 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, apierror.InvalidArgument("%v", err)
 	}
 
+	if req.GetExecution() != nil {
+		if !agentENVLocks.Lock(ctx, req.ActorUid) {
+			return nil, ctx.Err()
+		}
+		defer agentENVLocks.Unlock(req.ActorUid)
+		if err := validateAgentENVExisting(req.ActorUid, req.Execution); err != nil {
+			return nil, apierror.FailedPrecondition("%v", err)
+		}
+	}
+
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
@@ -665,6 +700,9 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	if err != nil {
 		return nil, err
 	}
+	if sandboxRec.SandboxClass == "agentenv" && req.GetExecution() == nil {
+		return nil, apierror.FailedPrecondition("AgentENV execution identity required")
+	}
 	op.sandboxClass = sandboxRec.SandboxClass
 
 	tAssets := time.Now()
@@ -691,6 +729,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	tAteom := time.Now()
 	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
+		Execution:             req.GetExecution(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1059,8 +1098,18 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, apierror.InvalidArgument("%v", err)
 	}
 
+	if req.GetSandboxAssets().GetSandboxClass() == "agentenv" && len(req.GetSpec().GetVolumes()) != 0 {
+		return nil, apierror.InvalidArgument("AgentENV volumes require typed drive descriptors")
+	}
+
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	if req.GetSandboxAssets().GetSandboxClass() == "agentenv" {
+		if !agentENVLocks.Lock(ctx, actorUID) {
+			return nil, ctx.Err()
+		}
+		defer agentENVLocks.Unlock(actorUID)
+	}
 
 	// The sandbox (binaries + pause image) that runs the restored workload
 	// comes from the request, resolved by the control plane from the
@@ -1122,6 +1171,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
+	if runtimeRec.SandboxClass == "agentenv" {
+		checkpointDir = agentENVRestoreDirectory(actorUID, req.Execution)
+		if err := os.MkdirAll(checkpointDir, 0700); err != nil {
+			return nil, err
+		}
+	}
 	directLocal := req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 	if directLocal {
 		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
@@ -1223,6 +1278,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return err
 		}
+		if runtimeRec.SandboxClass == "agentenv" {
+			return nil
+		}
 		if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return err
@@ -1251,6 +1309,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
+	var agentenvLaunch *aenvexecutorpb.LaunchSpec
+	if runtimeRec.SandboxClass == "agentenv" {
+		agentenvLaunch, err = s.prepareAgentENV(ctx, actorUID, req.Execution, req.Spec, runtimeRec, assetPaths, req.CpuMilli, req.MemoryBytes, req.AgentenvPolicy)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// Tell ateom to do runsc create + runsc restore for pause container and
 	// all application containers.
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
@@ -1265,6 +1330,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// this call as "Actor restore phases".
 	tAteom := time.Now()
 	_, err = client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
+		Execution:             req.GetExecution(),
+		AgentenvLaunch:        agentenvLaunch,
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1305,19 +1372,37 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	if req.GetExecution() != nil {
+		if !agentENVLocks.Lock(ctx, req.ActorUid) {
+			return nil, ctx.Err()
+		}
+		defer agentENVLocks.Unlock(req.ActorUid)
+		if err := validateAgentENVExisting(req.ActorUid, req.Execution); err != nil {
+			return nil, apierror.FailedPrecondition("%v", err)
+		}
+	}
+
 	actorUID := req.GetActorUid()
 
 	if req.GetTargetAteomUid() != "" {
 		var assetPaths map[string]string
-		sandboxRec, err := readSandboxRecord(actorUID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		// Embedded termination needs only its persisted fence. Runtime assets
+		// may already have been removed by an earlier successful termination.
+		if req.GetExecution() == nil {
+			sandboxRec, err := readSandboxRecord(actorUID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+			}
+			if sandboxRec.SandboxClass == "agentenv" && req.GetExecution() == nil {
+				return nil, apierror.FailedPrecondition("AgentENV execution identity required")
+			}
+			paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+			if err != nil {
+				return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+			}
+			assetPaths = paths
+
 		}
-		paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-		if err != nil {
-			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-		}
-		assetPaths = paths
 
 		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 		if err != nil {
@@ -1329,6 +1414,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 			return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 		}
 		if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
+			Execution:             req.GetExecution(),
 			Atespace:              req.GetAtespace(),
 			ActorName:             req.GetActorName(),
 			ActorUid:              req.GetActorUid(),
@@ -1338,7 +1424,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 			Spec:                  spec,
 			ActorDirs:             ateletpath.ActorDirs(actorUID),
 		}); err != nil {
-			if status.Code(err) == codes.NotFound {
+			if status.Code(err) == codes.NotFound && req.GetExecution() == nil {
 				slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
 			} else {
 				return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
@@ -1748,6 +1834,16 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 // boundary, before any path is built. The field rules live in
 // internal/resources so other components can apply them at their boundaries.
 func validateRunRequest(req *ateletpb.RunRequest) error {
+	if req.GetSandboxAssets().GetSandboxClass() == "agentenv" && req.GetExecution() == nil {
+		return fmt.Errorf("AgentENV execution identity required")
+	}
+
+	if req.GetExecution() != nil {
+		if err := aenvexecutor.ValidateOperation(req.GetExecution(), req.GetActorUid(), req.GetTargetAteomUid()); err != nil {
+			return err
+		}
+	}
+
 	var errs field.ErrorList
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
@@ -1767,6 +1863,12 @@ func validateRunRequest(req *ateletpb.RunRequest) error {
 }
 
 func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
+	if req.GetExecution() != nil {
+		if err := aenvexecutor.ValidateOperation(req.GetExecution(), req.GetActorUid(), req.GetTargetAteomUid()); err != nil {
+			return err
+		}
+	}
+
 	var errs field.ErrorList
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
@@ -1806,6 +1908,16 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 }
 
 func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
+	if req.GetSandboxAssets().GetSandboxClass() == "agentenv" && req.GetExecution() == nil {
+		return fmt.Errorf("AgentENV execution identity required")
+	}
+
+	if req.GetExecution() != nil {
+		if err := aenvexecutor.ValidateOperation(req.GetExecution(), req.GetActorUid(), req.GetTargetAteomUid()); err != nil {
+			return err
+		}
+	}
+
 	var errs field.ErrorList
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
@@ -1849,6 +1961,12 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 }
 
 func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
+	if req.GetExecution() != nil {
+		if err := aenvexecutor.ValidateOperation(req.GetExecution(), req.GetActorUid(), req.GetTargetAteomUid()); err != nil {
+			return err
+		}
+	}
+
 	var errs field.ErrorList
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)

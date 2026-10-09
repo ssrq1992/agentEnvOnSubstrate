@@ -33,6 +33,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/testpostgres"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 )
@@ -62,8 +64,28 @@ func configureDockerEnv(ctx context.Context) error {
 
 func startPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	pool := testpostgres.Open(t)
+	if pool == nil {
+		pool = startContainerPostgres(t)
+	}
+	db := stdlib.OpenDBFromPool(pool)
+	defer db.Close()
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, os.DirFS("../store/atepg/migrations"))
+	if err != nil {
+		t.Fatalf("create goose provider: %v", err)
+	}
+	if _, err = provider.Up(t.Context()); err != nil {
+		t.Fatalf("run Substrate and OpenFGA migrations: %v", err)
+	}
+	return pool
+}
+func startContainerPostgres(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	ctx := context.Background()
 	if err := configureDockerEnv(ctx); err != nil {
+		if dockerenv.Required() {
+			t.Fatalf("required PostgreSQL unavailable: %v", err)
+		}
 		t.Skipf("skipping test; docker is unavailable: %v", err)
 	}
 
@@ -75,6 +97,9 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 		postgres.BasicWaitStrategies(),
 	)
 	if err != nil {
+		if dockerenv.Required() {
+			t.Fatalf("required PostgreSQL unavailable: %v", err)
+		}
 		t.Skipf("skipping test; failed to start postgres container: %v", err)
 	}
 	t.Cleanup(func() {
@@ -106,15 +131,6 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("timed out waiting for postgres ping: %v", pingErr)
 	}
 
-	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, os.DirFS("../store/atepg/migrations"))
-	if err != nil {
-		t.Fatalf("create goose provider: %v", err)
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		t.Fatalf("run Substrate and OpenFGA migrations: %v", err)
-	}
 	return pool
 }
 

@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"fmt"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -129,13 +130,15 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 			return nil, err
 		}
 		ateletCtr := &ateletpb.Container{
-			Name:            ctr.GetName(),
-			Image:           ctr.GetImage(),
-			Command:         ctr.GetCommand(),
-			Args:            ctr.GetArgs(),
-			WakeupProbe:     toAteletWakeupProbe(ctr.GetWakeupProbe()),
-			SecurityContext: toAteletSecurityContext(ctr.GetSecurityContext()),
-			Resources:       ctrResources,
+			Name:                    ctr.GetName(),
+			Image:                   ctr.GetImage(),
+			Command:                 ctr.GetCommand(),
+			Args:                    ctr.GetArgs(),
+			WakeupProbe:             toAteletWakeupProbe(ctr.GetWakeupProbe()),
+			SecurityContext:         toAteletSecurityContext(ctr.GetSecurityContext()),
+			Resources:               ctrResources,
+			AgentenvExtensionParams: ctr.GetAgentenvExtensionParams(),
+			AgentenvLaunch:          proto.CloneOf(ctr.GetAgentenvLaunch()),
 		}
 		for _, env := range ctr.GetEnv() {
 			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvEntry{

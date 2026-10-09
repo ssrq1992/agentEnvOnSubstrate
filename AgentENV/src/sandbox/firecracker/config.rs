@@ -110,6 +110,16 @@ impl FirecrackerRuntimePolicy {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FirecrackerCommonConfig {
+    /// Allocation-local VMM cgroup, supplied by an embedding Worker.
+    #[serde(skip)]
+    pub cgroup_path: Option<PathBuf>,
+    /// Runtime-only topology owned by an embedding Worker, never a snapshot.
+    #[serde(skip)]
+    pub attached_network: Option<crate::sandbox::AttachedNetwork>,
+    /// Verified tools bytes staged from an embedded portable snapshot.
+    /// Host paths are reconstructed during restore and never serialized.
+    #[serde(skip)]
+    pub portable_tools_drive: Option<PathBuf>,
     pub firecracker_binary: PathBuf,
     /// Immutable release version of the complete tools drive.
     #[serde(default)]
@@ -187,6 +197,9 @@ impl FirecrackerCommonConfig {
     ) -> Self {
         Self {
             firecracker_binary,
+            attached_network: None,
+            cgroup_path: None,
+            portable_tools_drive: None,
             tools_drive_version,
             firecracker_work_base_dir: None,
             serial_output_base_dir: None,
@@ -260,6 +273,15 @@ impl FirecrackerCommonConfig {
     }
 
     pub(super) fn resolved_tools_drive_path(&self, config: &AppConfig) -> Result<PathBuf> {
+        if let Some(path) = &self.portable_tools_drive {
+            anyhow::ensure!(path.is_absolute(), "portable tools path must be absolute");
+            let metadata = std::fs::symlink_metadata(path)?;
+            anyhow::ensure!(
+                metadata.file_type().is_file() && metadata.len() > 0,
+                "portable tools drive must be a nonempty regular file"
+            );
+            return Ok(path.clone());
+        }
         if self.tools_drive_version.trim().is_empty() {
             anyhow::bail!(
                 "sandbox state does not record a tools drive version; migrate its persisted metadata before resuming it"
@@ -701,6 +723,36 @@ mod tests {
         path
     }
 
+    #[test]
+    fn portable_tools_are_verified_locally_and_not_serialized_as_host_paths() -> Result<()> {
+        let root = tempdir()?;
+        let path = write_file(root.path(), "tools.raw");
+        let mut common = FirecrackerCommonConfig::new(
+            "firecracker".into(),
+            "test-version".into(),
+            test_runtime_policy(),
+        );
+        common.portable_tools_drive = Some(path.clone());
+        common.cgroup_path = Some("/sys/fs/cgroup/allocation-local".into());
+        assert_eq!(
+            common.resolved_tools_drive_path(&AppConfig::default())?,
+            path
+        );
+        let encoded = serde_json::to_value(&common)?;
+        assert!(encoded.get("portable_tools_drive").is_none());
+        assert!(encoded.get("cgroup_path").is_none());
+        let decoded: FirecrackerCommonConfig = serde_json::from_value(encoded)?;
+        assert!(decoded.portable_tools_drive.is_none());
+        assert!(decoded.cgroup_path.is_none());
+        let link = root.path().join("tools-link");
+        std::os::unix::fs::symlink(&path, &link)?;
+        common.portable_tools_drive = Some(link);
+        assert!(common
+            .resolved_tools_drive_path(&AppConfig::default())
+            .is_err());
+        Ok(())
+    }
+
     fn base_app_config() -> AppConfig {
         let mut config = AppConfig::default();
         config.firecracker.binary_path = Some("firecracker".into());
@@ -997,4 +1049,8 @@ mod tests {
             .to_string()
             .contains(&format!("uses virtualization mode '{snapshot_mode}'")));
     }
+}
+
+pub(crate) fn default_boot_args() -> &'static str {
+    DEFAULT_BOOT_ARGS
 }

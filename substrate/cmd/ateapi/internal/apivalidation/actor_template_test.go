@@ -35,6 +35,30 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()},
 		nil,
 	}, {
+		"native extension object",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(t *ateapipb.ActorTemplate) {
+			t.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_AGENTENV
+			t.Containers[0].AgentenvExtensionParams = `{"extension":{"key":"value"}}`
+		})}, nil,
+	}, {
+		"native extension null",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(t *ateapipb.ActorTemplate) {
+			t.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_AGENTENV
+			t.Containers[0].AgentenvExtensionParams = `null`
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("agentenv_extension_params"), "[redacted]", "must be a JSON object")},
+	}, {
+		"native extension array",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(t *ateapipb.ActorTemplate) {
+			t.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_AGENTENV
+			t.Containers[0].AgentenvExtensionParams = `[]`
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("agentenv_extension_params"), "[redacted]", "must be a JSON object")},
+	}, {
+		"gvisor extension params rejected",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(t *ateapipb.ActorTemplate) { t.Containers[0].AgentenvExtensionParams = `{}` })},
+		field.ErrorList{field.Forbidden(field.NewPath("actor_template", "containers").Index(0).Child("agentenv_extension_params"), "requires AgentENV backend")},
+	}, {
 		"missing actor_template",
 		&ateapipb.CreateActorTemplateRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},
@@ -272,6 +296,12 @@ func TestValidateActorTemplate(t *testing.T) {
 		want   field.ErrorList
 	}{{
 		name: "valid",
+	}, {
+		name: "agentenv sandbox class",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_AGENTENV
+			tmpl.SandboxConfig.ConfigName = "agentenv-default"
+		},
 	}, {
 		name:   "missing metadata",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata = nil },

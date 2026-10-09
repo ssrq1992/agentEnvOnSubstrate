@@ -1,0 +1,201 @@
+syntax = "proto3";
+
+package agentenv.executor.v1;
+
+option go_package = "github.com/agent-substrate/substrate/internal/proto/aenvexecutorpb";
+
+// Private, release-coupled protocol. The socket must be in a 0700 Worker directory.
+service Executor {
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+  rpc Execute(OperationRequest) returns (OperationResponse);
+  rpc Inspect(InspectRequest) returns (InspectResponse);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+  rpc Reconcile(ReconcileRequest) returns (ReconcileResponse);
+}
+
+message CapabilitiesRequest {}
+message CapabilitiesResponse {
+  string protocol_version = 1;
+  string worker_instance_id = 2;
+  uint32 max_actors = 3;
+  repeated string capabilities = 4;
+  uint32 max_devices = 5;
+}
+
+message Fence {
+  string protocol_version = 1;
+  string actor_uid = 2;
+  string worker_pod_uid = 3;
+  uint64 worker_epoch = 4;
+  string worker_instance_id = 5;
+  uint64 assignment_generation = 6;
+}
+
+// Carried unchanged from the lifecycle authority through atelet to the adapter.
+message LifecycleOperation {
+  Fence fence = 1;
+  string operation_id = 2;
+}
+
+message OperationRequest {
+  Fence fence = 1;
+  string operation_id = 2;
+  // SHA-256 of the deterministic protobuf encoding of command, lowercase hex.
+  string payload_digest = 3;
+  int64 deadline_unix_millis = 4;
+  Command command = 5;
+}
+
+message Command {
+  oneof action {
+    LaunchSpec start = 1;
+    RestoreSpec restore = 2;
+    CaptureSpec capture = 3;
+    StopSpec stop = 4;
+    NetworkPolicy update_policy = 5;
+    ExtensionParams update_extensions = 6;
+  }
+}
+
+message LaunchSpec {
+  string image_digest = 1;
+  string image_config_path = 2;
+  repeated string argv = 3;
+  repeated EnvVar env = 4;
+  string cwd = 5;
+  string user = 6;
+  uint32 vcpus = 7;
+  uint64 memory_mib = 8;
+  uint64 rootfs_bytes = 9;
+  NetworkAttachment network = 10;
+  repeated RuntimeAsset assets = 11;
+  repeated Drive drives = 12;
+  string envd_access_token = 13 [ debug_redact = true ];
+  ExtensionParams extensions = 14;
+  string compatibility_domain = 15;
+  // Adapter-owned allocation-local cgroup, never a portable snapshot path.
+  string cgroup_path = 16;
+  string extra_boot_args = 17;
+}
+message EnvVar { string name = 1; string value = 2 [ debug_redact = true ]; }
+message RuntimeAsset { string name = 1; string path = 2; string sha256 = 3; }
+message NetworkAttachment {
+  string netns_path = 1;
+  string tap_name = 2;
+  string guest_ipv4 = 3;
+  string gateway_ipv4 = 4;
+  string guest_mac = 5;
+  uint32 mtu = 6;
+  NetworkPolicy policy = 7;
+  string interaction_ipv4 = 8;
+  string netmask = 9;
+  string dns_ipv4 = 10;
+  repeated string platform_denied_cidrs = 11;
+}
+message NetworkPolicy {
+  enum Base { DEFAULT = 0; ALLOW = 1; DENY = 2; }
+  Base base = 1;
+  repeated string allow_out = 2;
+  repeated string deny_out = 3;
+  uint64 revision = 4;
+}
+message ExtensionParams { string json = 1 [ debug_redact = true ]; }
+message Drive {
+  string id = 1;
+  string image_config_path = 2;
+  string mount_path = 3;
+  bool read_only = 4;
+  uint64 virtual_size = 5;
+  string volume_uid = 6;
+  string volume_version = 7;
+  string image_digest = 8;
+  string sub_path = 9;
+}
+message RestoreSpec {
+  LaunchSpec launch = 1;
+  string snapshot_dir = 2;
+  string manifest_sha256 = 3;
+}
+message CaptureSpec {
+  string output_dir = 1;
+  bool continue_running = 2;
+}
+message StopSpec {}
+
+enum Effect {
+  EFFECT_UNSPECIFIED = 0;
+  NO_EFFECT = 1;
+  COMPLETED = 2;
+  EFFECT_UNKNOWN = 3;
+}
+message OperationResponse {
+  Effect effect = 1;
+  string operation_id = 2;
+  string error_code = 3;
+  string error_message = 4;
+  repeated string snapshot_files = 5;
+  uint64 applied_policy_revision = 6;
+  ExtensionParams approved_extensions = 7;
+}
+message InspectRequest { Fence fence = 1; string operation_id = 2; }
+message InspectResponse {
+  Fence fence = 1;
+  string state = 2;
+  OperationResponse operation = 3;
+  string envd_version = 4;
+  ExtensionParams current_extensions = 5;
+  uint64 rootfs_bytes = 6;
+}
+message StatsRequest { Fence fence = 1; }
+// Guest counters, explicitly distinct from host cgroup accounting.
+message StatsResponse {
+  Fence fence = 1;
+  int64 observed_at_unix_millis = 2;
+  uint64 memory_used_bytes = 3;
+  uint64 memory_total_bytes = 4;
+  uint64 memory_cache_bytes = 5;
+  float cpu_used_percent = 6;
+  uint64 disk_used_bytes = 7;
+  uint64 disk_total_bytes = 8;
+  uint32 cpu_count = 9;
+}
+message ReconcileRequest {
+  string worker_pod_uid = 1;
+  uint64 worker_epoch = 2;
+  string worker_instance_id = 3;
+  repeated Fence assignments = 4;
+}
+message ReconcileResponse { repeated InspectResponse actors = 1; }
+
+// Control-plane to atelet/adapter envelope. Execution must already be durable;
+// a transport timeout does not acknowledge a policy revision.
+message ApplyNetworkPolicyRequest {
+  LifecycleOperation execution = 1;
+  string actor_uid = 2;
+  string target_worker_pod_uid = 3;
+  NetworkPolicy policy = 4;
+}
+message ApplyNetworkPolicyResponse {
+  uint64 applied_revision = 1;
+}
+
+// Worker routing envelope; the executor itself receives only StatsRequest.
+message ReadGuestStatsRequest {
+  LifecycleOperation execution = 1;
+  string actor_uid = 2;
+  string target_worker_pod_uid = 3;
+}
+
+message ReadRuntimeInfoRequest {
+  LifecycleOperation execution = 1;
+  string actor_uid = 2;
+  string target_worker_pod_uid = 3;
+}
+
+message ApplyExtensionParamsRequest {
+ LifecycleOperation execution = 1;
+ string actor_uid = 2;
+ string target_worker_pod_uid = 3;
+ ExtensionParams patch = 4;
+}
+message ApplyExtensionParamsResponse { ExtensionParams approved = 1; Effect effect = 2; }

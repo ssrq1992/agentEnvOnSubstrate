@@ -17,6 +17,7 @@ package apivalidation
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -283,6 +284,69 @@ func validHeaderName(value string) bool {
 func validHeaderValue(value string) bool {
 	for _, c := range []byte(value) {
 		if c != '\t' && (c < ' ' || c == 0x7f) {
+			return false
+		}
+	}
+	return true
+}
+
+func ValidateCustom_EgressPolicy(_ context.Context, _ operation.Operation, p *field.Path, policy, old *ateapipb.EgressPolicy) field.ErrorList {
+	if old != nil && ((old.Agentenv == nil) != (policy.Agentenv == nil)) {
+		return field.ErrorList{field.Invalid(p.Child("agentenv"), nil, "policy backend is immutable")}
+	}
+	if policy.GetAgentenv() == nil {
+		return nil
+	}
+	var errs field.ErrorList
+	if len(policy.Rules) != 0 {
+		errs = append(errs, field.Invalid(p.Child("rules"), nil, "cannot combine gateway rules with AgentENV policy"))
+	}
+	spec := policy.Agentenv
+	hasDomain, denyAll := false, false
+	for _, entry := range spec.DenyOut {
+		if entry == "0.0.0.0/0" {
+			denyAll = true
+		}
+	}
+	if len(spec.AllowOut)+len(spec.DenyOut) > 1024 {
+		errs = append(errs, field.Invalid(p.Child("agentenv"), nil, "at most 1024 combined rules are permitted"))
+	}
+	for _, list := range []struct {
+		name    string
+		entries []string
+		domains bool
+	}{{"allow_out", spec.AllowOut, true}, {"deny_out", spec.DenyOut, false}} {
+		for i, entry := range list.entries {
+			path := p.Child("agentenv", list.name).Index(i)
+			if len(entry) > 253 || entry == "" {
+				errs = append(errs, field.Invalid(path, entry, "rule must contain 1 to 253 bytes"))
+				continue
+			}
+			if address, err := netip.ParseAddr(entry); err == nil && address.Zone() == "" && address.Is4() {
+				continue
+			}
+			if prefix, err := netip.ParsePrefix(entry); err == nil && prefix.Addr().Is4() {
+				continue
+			}
+			if list.domains && !strings.Contains(entry, "/") && validAgentENVDomain(strings.ToLower(strings.TrimPrefix(entry, "*."))) {
+				hasDomain = true
+				continue
+			}
+			errs = append(errs, field.Invalid(path, entry, "expected IP/CIDR, or an allowed DNS name with optional leading wildcard"))
+		}
+	}
+	if hasDomain && !denyAll {
+		errs = append(errs, field.Invalid(p.Child("agentenv", "deny_out"), nil, "domain allow rules require explicit 0.0.0.0/0 deny, matching AgentENV"))
+	}
+	return errs
+}
+
+func validAgentENVDomain(domain string) bool {
+	if len(validation.IsDNS1123Subdomain(domain)) != 0 {
+		return false
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if len(validation.IsDNS1123Label(label)) != 0 {
 			return false
 		}
 	}

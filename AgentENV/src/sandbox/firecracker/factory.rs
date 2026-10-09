@@ -44,7 +44,7 @@ impl Default for FirecrackerSandboxFactory {
     }
 }
 
-fn filter_extra_boot_args(
+pub(crate) fn filter_extra_boot_args(
     extra_boot_args: Option<&str>,
     allowed_prefixes: &[String],
 ) -> Option<String> {

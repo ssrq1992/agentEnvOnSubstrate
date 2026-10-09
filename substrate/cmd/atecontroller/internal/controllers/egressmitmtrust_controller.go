@@ -26,6 +26,7 @@ import (
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	certsv1ac "k8s.io/client-go/applyconfigurations/certificates/v1"
@@ -47,7 +48,9 @@ type EgressMITMTrustReconciler struct {
 
 	// SystemNamespace is the namespace holding the egress MITM CA pool Secret.
 	SystemNamespace string
-	bundleV1        bool
+	// ConfigMapProvider uses only stable core/v1 APIs.
+	ConfigMapProvider bool
+	bundleV1          bool
 }
 
 // EgressMITMCAPoolRef names the Secret holding the CA pool the egress gateway
@@ -58,6 +61,7 @@ func EgressMITMCAPoolRef(systemNamespace string) types.NamespacedName {
 }
 
 //+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=certificates.k8s.io,resources=clustertrustbundles,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,resourceNames=egress-mitm.ate.dev/*,verbs=attest
 
@@ -83,6 +87,9 @@ func (r *EgressMITMTrustReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	trustBundle, err := egressMITMTrustBundlePEM(secret)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to derive the egress MITM trust bundle from %q: %w", req.NamespacedName, err)
+	}
+	if r.ConfigMapProvider {
+		return ctrl.Result{}, r.publishConfigMap(ctx, secret, trustBundle)
 	}
 
 	ctbAC := buildEgressMITMTrustBundleApplyConfig(trustBundle)
@@ -153,6 +160,20 @@ func egressMITMTrustBundlePEM(secret *corev1.Secret) (string, error) {
 }
 
 func (r *EgressMITMTrustReconciler) deleteTrustBundle(ctx context.Context) error {
+	if r.ConfigMapProvider {
+		bundle := &corev1.ConfigMap{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: r.SystemNamespace, Name: "egress-mitm-trust"}, bundle)
+		if k8errors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if bundle.Labels["ate.dev/trust-bundle"] != "egress-mitm" {
+			return fmt.Errorf("refusing to delete unmanaged trust ConfigMap")
+		}
+		return client.IgnoreNotFound(r.Delete(ctx, bundle, client.Preconditions{UID: &bundle.UID}))
+	}
 	log := log.FromContext(ctx)
 
 	obj := r.bundleObject()
@@ -183,6 +204,9 @@ func (r *EgressMITMTrustReconciler) deleteTrustBundle(ctx context.Context) error
 }
 
 func (r *EgressMITMTrustReconciler) bundleObject() client.Object {
+	if r.ConfigMapProvider {
+		return &corev1.ConfigMap{}
+	}
 	if r.bundleV1 {
 		return &certsv1.ClusterTrustBundle{}
 	}
@@ -190,15 +214,17 @@ func (r *EgressMITMTrustReconciler) bundleObject() client.Object {
 }
 
 func (r *EgressMITMTrustReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	disco, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
-	if err != nil {
-		return err
+	if !r.ConfigMapProvider {
+		disco, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
+		if err != nil {
+			return err
+		}
+		gv, err := clustertrustbundle.Discover(disco)
+		if err != nil {
+			return err
+		}
+		r.bundleV1 = gv == certsv1.SchemeGroupVersion
 	}
-	gv, err := clustertrustbundle.Discover(disco)
-	if err != nil {
-		return err
-	}
-	r.bundleV1 = gv == certsv1.SchemeGroupVersion
 
 	poolRef := EgressMITMCAPoolRef(r.SystemNamespace)
 
@@ -215,7 +241,31 @@ func (r *EgressMITMTrustReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return []reconcile.Request{{NamespacedName: poolRef}}
 			}),
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				if r.ConfigMapProvider {
+					return obj.GetNamespace() == r.SystemNamespace && obj.GetName() == "egress-mitm-trust"
+				}
 				return obj.GetName() == egressMITMTrustBundleName
 			}))).
 		Complete(r)
+}
+
+func (r *EgressMITMTrustReconciler) publishConfigMap(ctx context.Context, secret *corev1.Secret, pem string) error {
+	bundle := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: r.SystemNamespace, Name: "egress-mitm-trust"}, bundle)
+	create := k8errors.IsNotFound(err)
+	if err != nil && !create {
+		return err
+	}
+	if !create && bundle.Labels["ate.dev/trust-bundle"] != "egress-mitm" {
+		return fmt.Errorf("refusing to overwrite unmanaged trust ConfigMap")
+	}
+	if create {
+		bundle.ObjectMeta = metav1.ObjectMeta{Namespace: r.SystemNamespace, Name: "egress-mitm-trust", Labels: map[string]string{"ate.dev/trust-bundle": "egress-mitm"}}
+	}
+	bundle.Data = map[string]string{"ca.crt": pem}
+	bundle.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "Secret", Name: secret.Name, UID: secret.UID}}
+	if create {
+		return r.Create(ctx, bundle)
+	}
+	return r.Update(ctx, bundle)
 }

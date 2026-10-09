@@ -68,6 +68,18 @@ impl FirecrackerInstance {
         stderr_path: Option<&Path>,
         netns: Option<&Path>,
     ) -> Result<()> {
+        self.spawn_scoped(firecracker_binary, stdout_path, stderr_path, netns, None)
+            .await
+    }
+
+    pub async fn spawn_scoped(
+        &mut self,
+        firecracker_binary: &Path,
+        stdout_path: Option<&Path>,
+        stderr_path: Option<&Path>,
+        netns: Option<&Path>,
+        cgroup: Option<&Path>,
+    ) -> Result<()> {
         if self.process.is_some() {
             bail!("firecracker process already started");
         }
@@ -116,6 +128,29 @@ impl FirecrackerInstance {
         self.stderr_path = stderr_path.map(Path::to_path_buf);
 
         cmd.stdout(stdout).stderr(stderr);
+
+        // Open before fork; the child joins before exec and guest memory setup.
+        // Moving the executor/launcher thread would charge all Actors together.
+        let procs = cgroup
+            .map(|path| {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(path.join("cgroup.procs"))
+            })
+            .transpose()?;
+        if let Some(procs) = procs {
+            // SAFETY: this hook only calls the async-signal-safe write syscall
+            // using an already-open descriptor and a static byte buffer.
+            unsafe {
+                cmd.pre_exec(move || {
+                    let n = libc::write(procs.as_raw_fd(), b"0".as_ptr().cast(), 1);
+                    if n != 1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
 
         let child = crate::privileges::spawn_tokio_command_scoped(cmd, &[], move || {
             if let Some(netns) = netns {
@@ -219,23 +254,38 @@ impl FirecrackerInstance {
             "stopping firecracker process"
         );
 
-        if let Some(mut child) = self.process.take() {
-            // First try a graceful stop with SIGTERM
+        if let Some(child) = self.process.as_mut() {
             if let Some(pid) = child.id() {
                 trace!(pid, "sending SIGTERM to firecracker");
-                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+                if let Err(error) = kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+                    if error != nix::errno::Errno::ESRCH {
+                        return Err(error).context("signal firecracker during stop");
+                    }
+                }
             }
-
-            // Wait for the process to exit, but if it doesn't within the timeout, force kill it with SIGKILL
-            if time::timeout(timeout, child.wait()).await.is_err() {
-                warn!("firecracker stop timed out; sending SIGKILL");
-                let _ = child.start_kill();
-                let _ = child.wait().await;
+            match time::timeout(timeout, child.wait()).await {
+                Ok(result) => {
+                    result.context("wait for firecracker exit")?;
+                }
+                Err(_) => {
+                    warn!("firecracker stop timed out; sending SIGKILL");
+                    child
+                        .start_kill()
+                        .context("kill firecracker after stop timeout")?;
+                    time::timeout(timeout, child.wait())
+                        .await
+                        .context("firecracker exit unconfirmed after SIGKILL")?
+                        .context("wait for killed firecracker")?;
+                }
             }
+            // Only a successfully reaped child releases process ownership.
+            self.process.take();
         }
 
-        if self.socket_path.exists() {
-            let _ = fs::remove_file(&self.socket_path);
+        match fs::remove_file(&self.socket_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("remove stopped firecracker socket"),
         }
         debug!("firecracker process stopped");
         Ok(())
@@ -664,6 +714,64 @@ mod tests {
         instance.stop(Duration::from_millis(10)).await?;
 
         assert!(!instance.socket_path.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stop_reports_socket_cleanup_failure() -> Result<()> {
+        let temp = tempdir()?;
+        let mut instance = FirecrackerInstance::new(temp.path().to_path_buf());
+        fs::create_dir(&instance.socket_path)?;
+        assert!(instance.stop(Duration::from_millis(10)).await.is_err());
+        assert!(instance.socket_path.is_dir());
+        fs::remove_dir(&instance.socket_path)?;
+        instance.stop(Duration::from_millis(10)).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stop_reaps_process_before_releasing_ownership() -> Result<()> {
+        let temp = tempdir()?;
+        let mut instance = FirecrackerInstance::new(temp.path().to_path_buf());
+        instance.process = Some(
+            tokio::process::Command::new("/bin/sleep")
+                .arg("30")
+                .spawn()?,
+        );
+        fs::write(&instance.socket_path, b"owned socket")?;
+        instance.stop(Duration::from_secs(1)).await?;
+        assert!(instance.process.is_none());
+        assert!(!instance.socket_path.exists());
+        instance.stop(Duration::from_secs(1)).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scoped_spawn_joins_before_exec_without_moving_parent() -> Result<()> {
+        let root = tempdir()?;
+        let scope = root.path().join("scope");
+        fs::create_dir(&scope)?;
+        fs::write(scope.join("cgroup.procs"), b" ")?;
+        let parent_before = fs::read("/proc/self/cgroup")?;
+        let mut instance = FirecrackerInstance::new(root.path().to_path_buf());
+        instance
+            .spawn_scoped(Path::new("/bin/true"), None, None, None, Some(&scope))
+            .await?;
+        instance.stop(Duration::from_secs(1)).await?;
+        assert_eq!(fs::read(scope.join("cgroup.procs"))?, b"0");
+        assert_eq!(fs::read("/proc/self/cgroup")?, parent_before);
+        let mut missing = FirecrackerInstance::new(root.path().to_path_buf());
+        assert!(missing
+            .spawn_scoped(
+                Path::new("/bin/true"),
+                None,
+                None,
+                None,
+                Some(&root.path().join("missing"))
+            )
+            .await
+            .is_err());
+        assert!(missing.process.is_none());
         Ok(())
     }
 

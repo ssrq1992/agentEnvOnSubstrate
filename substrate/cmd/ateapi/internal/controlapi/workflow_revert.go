@@ -250,6 +250,8 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		toUpdate.Status.LocalSnapshot = nil
 		toUpdate.Status.Crash = nil
+		// The restored snapshot predates runtime edits; observe it anew on resume.
+		toUpdate.Status.AgentenvExtensionDelivery = nil
 		return nil
 	})
 	if err != nil {

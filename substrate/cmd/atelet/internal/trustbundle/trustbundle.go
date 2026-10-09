@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand/v2"
+	"os"
 
 	"github.com/agent-substrate/substrate/internal/pemutil"
 	certsv1 "k8s.io/api/certificates/v1"
@@ -42,6 +43,13 @@ type Source struct {
 	getCTB      func(name string) (*certsv1.ClusterTrustBundle, error)
 	systemRoots []byte
 	shuffleSeed int64
+	egressFile  string
+}
+
+// NewFileSource reads the ConfigMap-projected egress bundle on each refresh.
+// It never discovers or watches the ClusterTrustBundle API.
+func NewFileSource(egressFile string, systemRootsPEM []byte) *Source {
+	return &Source{egressFile: egressFile, systemRoots: systemRootsPEM, shuffleSeed: rand.Int64()}
 }
 
 // NewSource creates a Source
@@ -59,6 +67,16 @@ func (s *Source) raw(name string) ([]byte, error) {
 	case SystemRootsName:
 		return s.systemRoots, nil
 	case EgressName:
+		if s.egressFile != "" {
+			bundle, err := os.ReadFile(s.egressFile)
+			if err != nil {
+				return nil, fmt.Errorf("trust bundle %q: %w", name, err)
+			}
+			return bundle, nil
+		}
+		if s.getCTB == nil {
+			return nil, fmt.Errorf("trust bundle %q: no provider configured", name)
+		}
 		objectName := EgressCTB
 		bundle, err := s.getCTB(objectName)
 		if apierrors.IsNotFound(err) {

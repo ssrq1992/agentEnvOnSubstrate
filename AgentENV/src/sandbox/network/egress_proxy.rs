@@ -66,6 +66,7 @@ pub(crate) struct EgressProxy {
     next_connection_id: AtomicUsize,
     connections: Mutex<HashMap<Ipv4Addr, ConnectionState>>,
     resolver: HostNetResolver,
+    additional_denied_cidrs: Vec<ipnetwork::Ipv4Network>,
 }
 
 impl fmt::Debug for EgressProxy {
@@ -98,6 +99,12 @@ impl fmt::Debug for EgressProxy {
 
 impl EgressProxy {
     pub(crate) fn new() -> Arc<Self> {
+        Self::with_denied_cidrs(Vec::new())
+    }
+
+    pub(crate) fn with_denied_cidrs(
+        additional_denied_cidrs: Vec<ipnetwork::Ipv4Network>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             active: RwLock::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
@@ -106,11 +113,22 @@ impl EgressProxy {
             next_connection_id: AtomicUsize::new(0),
             connections: Mutex::new(HashMap::new()),
             resolver: HostNetResolver::new(),
+            additional_denied_cidrs,
         })
     }
 
     pub(crate) fn port(&self) -> u16 {
         EGRESS_PROXY_PORT
+    }
+
+    fn platform_allows(&self, address: IpAddr) -> bool {
+        match address {
+            IpAddr::V4(ip) => !self
+                .additional_denied_cidrs
+                .iter()
+                .any(|cidr| cidr.contains(ip)),
+            IpAddr::V6(_) => false,
+        }
     }
 
     /// Ensure that a listener is running in the sandbox namespace for the given host interaction IP.
@@ -549,7 +567,7 @@ fn handle_connection(
     // E2B keeps an explicit CIDR grant usable even when the same policy also
     // has domain rules. Connect directly to that original destination; only
     // the domain branch needs protocol inspection and trusted DNS resolution.
-    let (hostname, upstreams) = if active_policy.policy.is_ip_allowed(original_ip) {
+    let (hostname, mut upstreams) = if active_policy.policy.is_ip_allowed(original_ip) {
         (None, vec![original_addr])
     } else {
         let hostname = loop {
@@ -607,6 +625,9 @@ fn handle_connection(
         return;
     }
 
+    // Mediation connects from the Worker namespace, outside the guest's
+    // iptables rules. Apply its platform exclusions to resolved IPs here too.
+    upstreams.retain(|address| proxy.platform_allows(address.ip()));
     let mut selected_upstream = None;
     let mut upstream_stream = None;
     for upstream in upstreams {
@@ -910,6 +931,18 @@ fn original_destination(stream: &TcpStream) -> Result<(Ipv4Addr, u16)> {
 mod tests {
     use super::*;
     use crate::sandbox::{BaseSandboxNetworkPolicy, SandboxNetworkEgressPolicy};
+
+    #[test]
+    fn worker_platform_cidrs_apply_to_proxy_upstreams() {
+        let proxy = EgressProxy::with_denied_cidrs(vec![
+            "169.254.0.0/16".parse().unwrap(),
+            "10.32.0.0/12".parse().unwrap(),
+        ]);
+        assert!(!proxy.platform_allows("169.254.169.254".parse().unwrap()));
+        assert!(!proxy.platform_allows("10.33.0.5".parse().unwrap()));
+        assert!(!proxy.platform_allows("::1".parse().unwrap()));
+        assert!(proxy.platform_allows("203.0.113.8".parse().unwrap()));
+    }
 
     #[test]
     fn http_host_is_parsed() {

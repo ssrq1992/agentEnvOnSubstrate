@@ -258,13 +258,21 @@ impl LocalStartupPrefetch {
         self.cancel_signal.send_replace(true);
     }
 
-    pub(crate) async fn stop(mut self, timeout: Duration) {
-        self.cancel();
-        // A timed-out subscriber detaches; its worker retains the device lease
-        // until the in-kernel read returns and cleanup can finish.
-        if tokio::time::timeout(timeout, &mut self.task).await.is_err() {
-            warn!("startup prefetch cleanup continues in background after stop timeout");
+    pub(crate) async fn stop(self, timeout: Duration) {
+        if let Err(error) = self.stop_confirmed(timeout).await {
+            warn!(%error, "startup prefetch cleanup continues in background after stop");
         }
+    }
+
+    pub(crate) async fn stop_confirmed(mut self, timeout: Duration) -> Result<()> {
+        self.cancel();
+        // Timeout detaches the task, retaining its device lease. Embedded
+        // callers must not report complete resource reclamation in that case.
+        tokio::time::timeout(timeout, &mut self.task)
+            .await
+            .context("startup prefetch cleanup has not completed")?
+            .context("startup prefetch cleanup task failed")?;
+        Ok(())
     }
 }
 
@@ -736,6 +744,44 @@ mod tests {
             cancel_signal: cancel,
             task,
         }
+    }
+
+    #[tokio::test]
+    async fn confirmed_stop_requires_reader_completion() {
+        let (cancel, _receiver) = tokio::sync::watch::channel(false);
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        let (done, completed) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let _ = wait.await;
+            let _ = done.send(());
+        });
+        let prefetch = test_prefetch(cancel, task);
+        assert!(prefetch
+            .stop_confirmed(Duration::from_millis(5))
+            .await
+            .is_err());
+        // The timed-out task keeps its lease and continues cleanup.
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), completed)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn confirmed_stop_propagates_task_failure() {
+        let (cancel, _receiver) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async { panic!("controlled cleanup failure") });
+        assert!(test_prefetch(cancel, task)
+            .stop_confirmed(Duration::from_secs(1))
+            .await
+            .is_err());
+        let (cancel, _receiver) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async {});
+        assert!(test_prefetch(cancel, task)
+            .stop_confirmed(Duration::from_secs(1))
+            .await
+            .is_ok());
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@ pub mod api;
 pub mod api_key;
 pub mod cfg;
 mod digest;
+pub mod embedded;
 pub mod identity;
 pub mod image;
 mod local_store;

@@ -399,6 +399,14 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(wantPath); err == nil {
+			// EnsureImage's shared pull outlives caller cancellation. Join it
+			// before TempDir cleanup; waiting only for the asset and prewarm
+			// worker can leave that pull writing into the removed cache.
+			pullCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if _, err := store.EnsureImage(pullCtx, pauseRef); err != nil {
+				t.Fatalf("pause image prewarm: %v", err)
+			}
 			return
 		} else if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("stat %s: %v", wantPath, err)

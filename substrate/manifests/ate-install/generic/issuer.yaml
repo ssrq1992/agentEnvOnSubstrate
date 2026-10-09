@@ -1,0 +1,132 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http:#www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: podidentity-issuer
+  namespace: ate-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ate-podidentity-issuer
+rules:
+- apiGroups: [authentication.k8s.io]
+  resources: [tokenreviews]
+  verbs: [create]
+- apiGroups: [""]
+  resources: [pods, serviceaccounts, nodes]
+  verbs: [get]
+- apiGroups: [""]
+  resources: [services]
+  verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ate-podidentity-issuer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ate-podidentity-issuer
+subjects:
+- kind: ServiceAccount
+  name: podidentity-issuer
+  namespace: ate-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podidentity-issuer
+  namespace: ate-system
+spec:
+  selector:
+    app: podidentity-issuer
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podidentity-issuer
+  namespace: ate-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: podidentity-issuer
+  template:
+    metadata:
+      labels:
+        app: podidentity-issuer
+    spec:
+      serviceAccountName: podidentity-issuer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+      - name: issuer
+        image: ko://github.com/agent-substrate/substrate/cmd/podidentityissuer
+        args:
+        - --listen=:8443
+        - --ca-pool=/run/issuer/pool.json
+        - --tls-cert=/run/issuer/tls.crt
+        - --tls-key=/run/issuer/tls.key
+        - --service-accounts=ate-system/ate-api-server,ate-system/ate-controller,ate-system/atelet,ate-system/atenet-router,ate-system/atenet-egress,ate-system/aenv-worker
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        ports:
+        - name: https
+          containerPort: 8443
+        readinessProbe:
+          tcpSocket:
+            port: https
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+        volumeMounts:
+        - name: issuer-credentials
+          mountPath: /run/issuer
+          readOnly: true
+      volumes:
+      - name: issuer-credentials
+        secret:
+          secretName: podidentity-issuer-credentials
+          defaultMode: 0440
+          items:
+          - key: pool.json
+            path: pool.json
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aenv-worker
+  namespace: ate-system

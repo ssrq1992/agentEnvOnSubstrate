@@ -22,6 +22,7 @@ package ateletpb
 
 import (
 	context "context"
+	aenvexecutorpb "github.com/agent-substrate/substrate/internal/proto/aenvexecutorpb"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -251,8 +252,14 @@ var AteomSupport_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	AteomHerder_ReadGuestStats_FullMethodName         = "/atelet.AteomHerder/ReadGuestStats"
+	AteomHerder_ApplyNetworkPolicy_FullMethodName     = "/atelet.AteomHerder/ApplyNetworkPolicy"
+	AteomHerder_ReadRuntimeInfo_FullMethodName        = "/atelet.AteomHerder/ReadRuntimeInfo"
+	AteomHerder_ApplyExtensionParams_FullMethodName   = "/atelet.AteomHerder/ApplyExtensionParams"
+	AteomHerder_ReadAgentENVConnection_FullMethodName = "/atelet.AteomHerder/ReadAgentENVConnection"
 	AteomHerder_Run_FullMethodName                    = "/atelet.AteomHerder/Run"
 	AteomHerder_Checkpoint_FullMethodName             = "/atelet.AteomHerder/Checkpoint"
+	AteomHerder_Capture_FullMethodName                = "/atelet.AteomHerder/Capture"
 	AteomHerder_Restore_FullMethodName                = "/atelet.AteomHerder/Restore"
 	AteomHerder_UploadPausedCheckpoint_FullMethodName = "/atelet.AteomHerder/UploadPausedCheckpoint"
 	AteomHerder_Terminate_FullMethodName              = "/atelet.AteomHerder/Terminate"
@@ -267,6 +274,14 @@ const (
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
 type AteomHerderClient interface {
+	// AgentENV guest measurements, distinct from host cgroup consumption.
+	ReadGuestStats(ctx context.Context, in *aenvexecutorpb.ReadGuestStatsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.StatsResponse, error)
+	// AgentENV-only live policy mutation; success confirms the exact revision.
+	ApplyNetworkPolicy(ctx context.Context, in *aenvexecutorpb.ApplyNetworkPolicyRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error)
+	ReadRuntimeInfo(ctx context.Context, in *aenvexecutorpb.ReadRuntimeInfoRequest, opts ...grpc.CallOption) (*aenvexecutorpb.InspectResponse, error)
+	ApplyExtensionParams(ctx context.Context, in *aenvexecutorpb.ApplyExtensionParamsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyExtensionParamsResponse, error)
+	// Read the allocation-local envd credential after checking its full fence.
+	ReadAgentENVConnection(ctx context.Context, in *ReadAgentENVConnectionRequest, opts ...grpc.CallOption) (*ReadAgentENVConnectionResponse, error)
 	// Run tells atelet to create a new containerized workload from scratch on an
 	// ateom.
 	Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (*RunResponse, error)
@@ -274,6 +289,8 @@ type AteomHerderClient interface {
 	// ateom to object storage, and then completely the ateom to a blank state
 	// (back to "available" state.)
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
+	// Upload a FULL AgentENV capture without stopping or releasing its source.
+	Capture(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
 	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
@@ -294,6 +311,56 @@ func NewAteomHerderClient(cc grpc.ClientConnInterface) AteomHerderClient {
 	return &ateomHerderClient{cc}
 }
 
+func (c *ateomHerderClient) ReadGuestStats(ctx context.Context, in *aenvexecutorpb.ReadGuestStatsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.StatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.StatsResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_ReadGuestStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomHerderClient) ApplyNetworkPolicy(ctx context.Context, in *aenvexecutorpb.ApplyNetworkPolicyRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.ApplyNetworkPolicyResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_ApplyNetworkPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomHerderClient) ReadRuntimeInfo(ctx context.Context, in *aenvexecutorpb.ReadRuntimeInfoRequest, opts ...grpc.CallOption) (*aenvexecutorpb.InspectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.InspectResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_ReadRuntimeInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomHerderClient) ApplyExtensionParams(ctx context.Context, in *aenvexecutorpb.ApplyExtensionParamsRequest, opts ...grpc.CallOption) (*aenvexecutorpb.ApplyExtensionParamsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(aenvexecutorpb.ApplyExtensionParamsResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_ApplyExtensionParams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomHerderClient) ReadAgentENVConnection(ctx context.Context, in *ReadAgentENVConnectionRequest, opts ...grpc.CallOption) (*ReadAgentENVConnectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadAgentENVConnectionResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_ReadAgentENVConnection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *ateomHerderClient) Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (*RunResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunResponse)
@@ -308,6 +375,16 @@ func (c *ateomHerderClient) Checkpoint(ctx context.Context, in *CheckpointReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CheckpointResponse)
 	err := c.cc.Invoke(ctx, AteomHerder_Checkpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomHerderClient) Capture(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckpointResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_Capture_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +430,14 @@ func (c *ateomHerderClient) Terminate(ctx context.Context, in *TerminateRequest,
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
 type AteomHerderServer interface {
+	// AgentENV guest measurements, distinct from host cgroup consumption.
+	ReadGuestStats(context.Context, *aenvexecutorpb.ReadGuestStatsRequest) (*aenvexecutorpb.StatsResponse, error)
+	// AgentENV-only live policy mutation; success confirms the exact revision.
+	ApplyNetworkPolicy(context.Context, *aenvexecutorpb.ApplyNetworkPolicyRequest) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error)
+	ReadRuntimeInfo(context.Context, *aenvexecutorpb.ReadRuntimeInfoRequest) (*aenvexecutorpb.InspectResponse, error)
+	ApplyExtensionParams(context.Context, *aenvexecutorpb.ApplyExtensionParamsRequest) (*aenvexecutorpb.ApplyExtensionParamsResponse, error)
+	// Read the allocation-local envd credential after checking its full fence.
+	ReadAgentENVConnection(context.Context, *ReadAgentENVConnectionRequest) (*ReadAgentENVConnectionResponse, error)
 	// Run tells atelet to create a new containerized workload from scratch on an
 	// ateom.
 	Run(context.Context, *RunRequest) (*RunResponse, error)
@@ -360,6 +445,8 @@ type AteomHerderServer interface {
 	// ateom to object storage, and then completely the ateom to a blank state
 	// (back to "available" state.)
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
+	// Upload a FULL AgentENV capture without stopping or releasing its source.
+	Capture(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
@@ -380,11 +467,29 @@ type AteomHerderServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAteomHerderServer struct{}
 
+func (UnimplementedAteomHerderServer) ReadGuestStats(context.Context, *aenvexecutorpb.ReadGuestStatsRequest) (*aenvexecutorpb.StatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadGuestStats not implemented")
+}
+func (UnimplementedAteomHerderServer) ApplyNetworkPolicy(context.Context, *aenvexecutorpb.ApplyNetworkPolicyRequest) (*aenvexecutorpb.ApplyNetworkPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyNetworkPolicy not implemented")
+}
+func (UnimplementedAteomHerderServer) ReadRuntimeInfo(context.Context, *aenvexecutorpb.ReadRuntimeInfoRequest) (*aenvexecutorpb.InspectResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadRuntimeInfo not implemented")
+}
+func (UnimplementedAteomHerderServer) ApplyExtensionParams(context.Context, *aenvexecutorpb.ApplyExtensionParamsRequest) (*aenvexecutorpb.ApplyExtensionParamsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyExtensionParams not implemented")
+}
+func (UnimplementedAteomHerderServer) ReadAgentENVConnection(context.Context, *ReadAgentENVConnectionRequest) (*ReadAgentENVConnectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadAgentENVConnection not implemented")
+}
 func (UnimplementedAteomHerderServer) Run(context.Context, *RunRequest) (*RunResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Run not implemented")
 }
 func (UnimplementedAteomHerderServer) Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Checkpoint not implemented")
+}
+func (UnimplementedAteomHerderServer) Capture(context.Context, *CheckpointRequest) (*CheckpointResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Capture not implemented")
 }
 func (UnimplementedAteomHerderServer) Restore(context.Context, *RestoreRequest) (*RestoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Restore not implemented")
@@ -414,6 +519,96 @@ func RegisterAteomHerderServer(s grpc.ServiceRegistrar, srv AteomHerderServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AteomHerder_ServiceDesc, srv)
+}
+
+func _AteomHerder_ReadGuestStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ReadGuestStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).ReadGuestStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_ReadGuestStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).ReadGuestStats(ctx, req.(*aenvexecutorpb.ReadGuestStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AteomHerder_ApplyNetworkPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ApplyNetworkPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).ApplyNetworkPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_ApplyNetworkPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).ApplyNetworkPolicy(ctx, req.(*aenvexecutorpb.ApplyNetworkPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AteomHerder_ReadRuntimeInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ReadRuntimeInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).ReadRuntimeInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_ReadRuntimeInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).ReadRuntimeInfo(ctx, req.(*aenvexecutorpb.ReadRuntimeInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AteomHerder_ApplyExtensionParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(aenvexecutorpb.ApplyExtensionParamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).ApplyExtensionParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_ApplyExtensionParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).ApplyExtensionParams(ctx, req.(*aenvexecutorpb.ApplyExtensionParamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AteomHerder_ReadAgentENVConnection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadAgentENVConnectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).ReadAgentENVConnection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_ReadAgentENVConnection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).ReadAgentENVConnection(ctx, req.(*ReadAgentENVConnectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AteomHerder_Run_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -448,6 +643,24 @@ func _AteomHerder_Checkpoint_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AteomHerderServer).Checkpoint(ctx, req.(*CheckpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AteomHerder_Capture_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).Capture(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_Capture_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).Capture(ctx, req.(*CheckpointRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -514,12 +727,36 @@ var AteomHerder_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*AteomHerderServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "ReadGuestStats",
+			Handler:    _AteomHerder_ReadGuestStats_Handler,
+		},
+		{
+			MethodName: "ApplyNetworkPolicy",
+			Handler:    _AteomHerder_ApplyNetworkPolicy_Handler,
+		},
+		{
+			MethodName: "ReadRuntimeInfo",
+			Handler:    _AteomHerder_ReadRuntimeInfo_Handler,
+		},
+		{
+			MethodName: "ApplyExtensionParams",
+			Handler:    _AteomHerder_ApplyExtensionParams_Handler,
+		},
+		{
+			MethodName: "ReadAgentENVConnection",
+			Handler:    _AteomHerder_ReadAgentENVConnection_Handler,
+		},
+		{
 			MethodName: "Run",
 			Handler:    _AteomHerder_Run_Handler,
 		},
 		{
 			MethodName: "Checkpoint",
 			Handler:    _AteomHerder_Checkpoint_Handler,
+		},
+		{
+			MethodName: "Capture",
+			Handler:    _AteomHerder_Capture_Handler,
 		},
 		{
 			MethodName: "Restore",

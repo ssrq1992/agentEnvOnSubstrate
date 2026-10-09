@@ -1,4 +1,5 @@
 mod address_plan;
+mod attached;
 mod egress_proxy;
 mod iptables_util;
 mod manager;
@@ -11,6 +12,7 @@ use std::path::Path;
 use anyhow::Context;
 
 pub(crate) use address_plan::NetworkAddressPlan;
+pub use attached::AttachedNetwork;
 pub(crate) use manager::NetworkManager;
 pub use policy::{
     BaseSandboxNetworkPolicy, SandboxNetworkEgressPolicy, SandboxNetworkPolicy,

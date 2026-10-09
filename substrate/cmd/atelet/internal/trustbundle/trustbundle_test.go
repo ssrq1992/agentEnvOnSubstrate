@@ -23,6 +23,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -203,4 +205,33 @@ func TestTrustBundleSourceCombined(t *testing.T) {
 			t.Error("combined(nil) succeeded, want an error")
 		}
 	})
+}
+
+func TestFileSourceRotationAndFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	first, second := testCertPEM(t), testCertPEM(t)
+	if err := os.WriteFile(path, first, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source := NewFileSource(path, nil)
+	got, err := source.Combined([]string{EgressName})
+	if err != nil || !slices.Equal(parseBundle(t, got), parseBundle(t, first)) {
+		t.Fatalf("initial bundle: %v", err)
+	}
+	if err := os.WriteFile(path, second, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = source.Combined([]string{EgressName})
+	if err != nil || !slices.Equal(parseBundle(t, got), parseBundle(t, second)) {
+		t.Fatalf("rotated bundle: %v", err)
+	}
+	if _, err := source.Combined([]string{"../../private-ca"}); err == nil {
+		t.Fatal("accepted unknown bundle")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Combined([]string{EgressName}); err == nil {
+		t.Fatal("missing bundle was silently accepted")
+	}
 }

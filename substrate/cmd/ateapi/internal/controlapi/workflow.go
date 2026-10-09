@@ -145,6 +145,12 @@ func NewActorWorkflow(
 // actorWorkflowStore enumerates the exact storage methods needed by
 // ActorWorkflow and nothing more.
 type actorWorkflowStore interface {
+	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)
+	GetEgressPolicy(context.Context, resources.ActorRef) (*ateapipb.EgressPolicy, error)
+	CreateEgressPolicy(context.Context, resources.ActorRef, *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)
+	UpdateEgressPolicy(context.Context, resources.ActorRef, store.Precondition, func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error)
+	DeleteEgressPolicy(context.Context, resources.ActorRef, store.DeletePreconditions) (*ateapipb.EgressPolicy, error)
+
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error)

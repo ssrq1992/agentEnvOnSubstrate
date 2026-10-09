@@ -156,6 +156,11 @@ func parseSchedulerDuration(raw json.RawMessage, field string) (time.Duration, e
 }
 
 type GatewayConfig struct {
+	Mode                   string `json:"mode"`
+	BridgeURL              string `json:"bridge_url"`
+	BridgeCredentialBundle string `json:"bridge_credential_bundle"`
+	BridgeTrustBundle      string `json:"bridge_trust_bundle"`
+
 	HTTPListenAddr         string        `json:"http_listen_addr"`
 	MetricsListenAddr      string        `json:"metrics_listen_addr"`
 	SchedulerAddr          string        `json:"scheduler_addr"`
@@ -170,6 +175,11 @@ type GatewayConfig struct {
 
 func (g *GatewayConfig) UnmarshalJSON(data []byte) error {
 	type wire struct {
+		Mode                   *string `json:"mode"`
+		BridgeURL              *string `json:"bridge_url"`
+		BridgeCredentialBundle *string `json:"bridge_credential_bundle"`
+		BridgeTrustBundle      *string `json:"bridge_trust_bundle"`
+
 		HTTPListenAddr         *string         `json:"http_listen_addr"`
 		MetricsListenAddr      *string         `json:"metrics_listen_addr"`
 		SchedulerAddr          *string         `json:"scheduler_addr"`
@@ -183,6 +193,19 @@ func (g *GatewayConfig) UnmarshalJSON(data []byte) error {
 	parsed := wire{}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return err
+	}
+
+	if parsed.Mode != nil {
+		g.Mode = *parsed.Mode
+	}
+	if parsed.BridgeURL != nil {
+		g.BridgeURL = *parsed.BridgeURL
+	}
+	if parsed.BridgeCredentialBundle != nil {
+		g.BridgeCredentialBundle = *parsed.BridgeCredentialBundle
+	}
+	if parsed.BridgeTrustBundle != nil {
+		g.BridgeTrustBundle = *parsed.BridgeTrustBundle
 	}
 
 	if parsed.HTTPListenAddr != nil {
@@ -298,6 +321,7 @@ func defaultConfig(service string) Config {
 			},
 		},
 		Gateway: GatewayConfig{
+			Mode:                "standalone",
 			HTTPListenAddr:      ":8080",
 			MetricsListenAddr:   ":9102",
 			SchedulerAddr:       "127.0.0.1:9090",
@@ -320,6 +344,10 @@ func overrideWithEnv(cfg *Config) error {
 	set("SCHEDULER_METRICS_LISTEN_ADDR", &cfg.Scheduler.MetricsListenAddr)
 	set("SCHEDULER_STRATEGY", &cfg.Scheduler.Strategy)
 	set("SCHEDULER_REDIS_ADDR", &cfg.Scheduler.RedisAddr)
+	set("GATEWAY_MODE", &cfg.Gateway.Mode)
+	set("GATEWAY_BRIDGE_URL", &cfg.Gateway.BridgeURL)
+	set("GATEWAY_BRIDGE_CREDENTIAL_BUNDLE", &cfg.Gateway.BridgeCredentialBundle)
+	set("GATEWAY_BRIDGE_TRUST_BUNDLE", &cfg.Gateway.BridgeTrustBundle)
 	set("GATEWAY_HTTP_LISTEN_ADDR", &cfg.Gateway.HTTPListenAddr)
 	set("GATEWAY_METRICS_LISTEN_ADDR", &cfg.Gateway.MetricsListenAddr)
 	set("GATEWAY_SCHEDULER_ADDR", &cfg.Gateway.SchedulerAddr)
@@ -481,8 +509,17 @@ func (c Config) validate(schedulerQueryOnly bool) error {
 		if c.Gateway.MetricsListenAddr == "" {
 			return errors.New("gateway.metrics_listen_addr is required")
 		}
-		if c.Gateway.SchedulerAddr == "" {
-			return errors.New("gateway.scheduler_addr is required")
+		switch c.Gateway.Mode {
+		case "", "standalone":
+			if c.Gateway.SchedulerAddr == "" {
+				return errors.New("gateway.scheduler_addr is required")
+			}
+		case "substrate":
+			if c.Gateway.BridgeURL == "" || c.Gateway.BridgeCredentialBundle == "" || c.Gateway.BridgeTrustBundle == "" {
+				return errors.New("substrate gateway requires bridge URL, client credential and trust bundles")
+			}
+		default:
+			return errors.New("gateway.mode must be standalone or substrate")
 		}
 	}
 	return nil

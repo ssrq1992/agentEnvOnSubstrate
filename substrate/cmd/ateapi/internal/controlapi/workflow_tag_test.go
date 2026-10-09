@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -564,5 +565,62 @@ func TestDeleteTag_Preconditions(t *testing.T) {
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteTag_RefusesBorrowedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	source, _ := seedTagSource(t, ctx, persistence, objects, template, "source", "manifest.json", "memory.zst")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(source), "borrowed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	borrower := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "borrower"},
+		ActorTemplate: source.GetActorTemplate(),
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ExternalSnapshot: tag.GetStatus().GetSnapshot()},
+	})
+	var deleted atomic.Bool
+	objects.OnDelete = func(string, string) error { deleted.Store(true); return nil }
+	if _, err := w.DeleteTag(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("delete borrowed tag = %v", err)
+	}
+	if deleted.Load() {
+		t.Fatal("borrowed objects were collected")
+	}
+	if _, err := persistence.GetTag(ctx, resources.TagRefFromTag(tag)); err != nil {
+		t.Fatal(err)
+	}
+	mustUpdateActorStatus(t, ctx, persistence, borrower, func(s *ateapipb.ActorStatus) { s.ExternalSnapshot = nil })
+	if _, err := w.DeleteTag(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSnapshotChildPinsTagIncarnation(t *testing.T) {
+	ctx := t.Context()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	source, _ := seedTagSource(t, ctx, persistence, objects, template, "source", "manifest.json")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(source), "captured"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	impl := &ServiceImpl{store: persistence}
+	input := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "child"}, ActorTemplate: source.GetActorTemplate(), SourceTag: &ateapipb.ObjectRef{Atespace: "team-a", Name: "captured"}, SourceTagUid: "01900000-0000-7000-8000-000000000009"}
+	if _, err := impl.CreateActor(ctx, input); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale snapshot identity accepted: %v", err)
+	}
+	input.SourceTagUid = tag.Metadata.Uid
+	child, err := impl.CreateActor(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.GetSourceTagUid() != tag.Metadata.Uid || child.GetStatus().GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() {
+		t.Fatal("snapshot identity lost")
 	}
 }

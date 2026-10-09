@@ -2200,6 +2200,18 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if got, want := again.GetMetadata().GetVersion(), first.GetMetadata().GetVersion()+1; got != want {
 			t.Errorf("rebind left version at %d, want %d: an update advances it", got, want)
 		}
+		if first.GetAssignmentGeneration() == 0 || again.GetAssignmentGeneration() != first.GetAssignmentGeneration() {
+			t.Fatal("retry changed or omitted the durable assignment generation")
+		}
+		if _, err := s.ReleaseActorFromWorker(ctx, testWorkerName, "uid-1"); err != nil {
+			t.Fatal(err)
+		}
+		next := newTestAssignment("uid-1", 250, 1<<21)
+		next.AssignmentGeneration = 999999 // callers cannot select generations
+		bind(t, s, testWorkerName, next)
+		if next.GetAssignmentGeneration() <= first.GetAssignmentGeneration() || next.GetAssignmentGeneration() == 999999 {
+			t.Fatal("new allocation did not obtain a new store-owned generation")
+		}
 	})
 
 	t.Run("BindActorToWorker_RefusedAdmissionLeavesNothingBehind", func(t *testing.T) {

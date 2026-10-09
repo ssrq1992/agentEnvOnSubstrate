@@ -23,6 +23,13 @@ const TRAFFIC_ACCESS_TOKEN_PREFIX: &str = "sandbox-traffic";
 pub struct EnvdAccessToken(String);
 
 impl EnvdAccessToken {
+    /// Accept a credential from the trusted embedding control plane.
+    pub(crate) fn from_control_plane(value: String) -> Result<Self> {
+        if value.len() < 32 || value.len() > 4096 || value.chars().any(char::is_control) {
+            bail!("invalid embedded envd credential");
+        }
+        Ok(Self(value))
+    }
     pub fn expose(&self) -> &str {
         &self.0
     }

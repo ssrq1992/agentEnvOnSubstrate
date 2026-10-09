@@ -88,10 +88,22 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		if worker.Status == nil {
 			worker.Status = &ateapipb.WorkerStatus{}
 		}
+		if worker.GetSandboxClass() == "agentenv" && worker.GetEpoch() != worker.GetStatus().GetObservedEpoch() {
+			return nil, fmt.Errorf("%w: worker epoch has not been reconciled", store.ErrVersionConflict)
+		}
 
 		// Read under the row lock, so an epoch raised concurrently is either
 		// seen here or raised after this bind commits.
+		if worker.GetSandboxClass() == "agentenv" && (worker.GetEpoch() <= 0 || worker.GetStatus().GetRegisteredEpoch() != worker.GetEpoch() || worker.GetStatus().GetExecutorInstanceId() == "") {
+			return nil, fmt.Errorf("%w: executor is not registered for current epoch", store.ErrVersionConflict)
+		}
 		assignment.WorkerEpoch = worker.GetEpoch()
+		assignment.ExecutorInstanceId = worker.GetStatus().GetExecutorInstanceId()
+		var generation int64
+		if err := tx.QueryRow(ctx, `SELECT nextval('assignment_generation')`).Scan(&generation); err != nil {
+			return nil, fmt.Errorf("allocating assignment generation: %w", err)
+		}
+		assignment.AssignmentGeneration = uint64(generation)
 		assignmentBytes, err := proto.Marshal(assignment)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling assignment: %w", err)
@@ -134,6 +146,13 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		}
 		if previousWorker != workerName {
 			return nil, fmt.Errorf("actor %s is already hosted by worker %s", actorUID, previousWorker)
+		}
+		sameExecution := previous.GetWorkerEpoch() == worker.GetEpoch() && previous.GetExecutorInstanceId() == worker.GetStatus().GetExecutorInstanceId()
+		if !sameExecution && (worker.GetSandboxClass() == "agentenv" || previous.GetExecutorInstanceId() != "") {
+			return nil, fmt.Errorf("%w: previous assignment belongs to a different worker epoch", store.ErrVersionConflict)
+		}
+		if sameExecution {
+			assignment.AssignmentGeneration = previous.GetAssignmentGeneration()
 		}
 
 		// Subtract before adding: the Actor is already counted, and its

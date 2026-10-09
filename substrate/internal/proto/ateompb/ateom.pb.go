@@ -21,6 +21,7 @@
 package ateompb
 
 import (
+	aenvexecutorpb "github.com/agent-substrate/substrate/internal/proto/aenvexecutorpb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -101,6 +102,8 @@ const (
 	SandboxClass_SANDBOX_CLASS_GVISOR SandboxClass = 1
 	// Micro-VM (cmd/ateom-microvm).
 	SandboxClass_SANDBOX_CLASS_MICROVM SandboxClass = 2
+	// AgentENV / Firecracker with Worker-local ublk storage.
+	SandboxClass_SANDBOX_CLASS_AGENTENV SandboxClass = 3
 )
 
 // Enum value maps for SandboxClass.
@@ -109,11 +112,13 @@ var (
 		0: "SANDBOX_CLASS_UNSPECIFIED",
 		1: "SANDBOX_CLASS_GVISOR",
 		2: "SANDBOX_CLASS_MICROVM",
+		3: "SANDBOX_CLASS_AGENTENV",
 	}
 	SandboxClass_value = map[string]int32{
 		"SANDBOX_CLASS_UNSPECIFIED": 0,
 		"SANDBOX_CLASS_GVISOR":      1,
 		"SANDBOX_CLASS_MICROVM":     2,
+		"SANDBOX_CLASS_AGENTENV":    3,
 	}
 )
 
@@ -308,15 +313,17 @@ func (x *ActorDirs) GetVolumesDir() string {
 }
 
 type TerminateWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	ActorDirs             *ActorDirs             `protobuf:"bytes,8,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Execution             *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,9,opt,name=execution,proto3" json:"execution,omitempty"`
+	Atespace              string                             `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                             `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                             `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                             `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                             `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	RunscPath             string                             `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	Spec                  *WorkloadSpec                      `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	ActorDirs             *ActorDirs                         `protobuf:"bytes,8,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -349,6 +356,13 @@ func (x *TerminateWorkloadRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use TerminateWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*TerminateWorkloadRequest) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *TerminateWorkloadRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *TerminateWorkloadRequest) GetAtespace() string {
@@ -444,14 +458,18 @@ func (*TerminateWorkloadResponse) Descriptor() ([]byte, []int) {
 }
 
 type RunWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	AgentenvLaunch *aenvexecutorpb.LaunchSpec `protobuf:"bytes,15,opt,name=agentenv_launch,json=agentenvLaunch,proto3" json:"agentenv_launch,omitempty"`
+	// +k8s:opaqueType
+	Execution             *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,14,opt,name=execution,proto3" json:"execution,omitempty"`
+	Atespace              string                             `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                             `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                             `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                             `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                             `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	RunscPath             string                             `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	Spec                  *WorkloadSpec                      `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
 	// "virtiofsd", "kata-kernel", "kata-image")
 	// to the local on-disk path atelet fetched it to (content-addressed, like
@@ -498,6 +516,20 @@ func (x *RunWorkloadRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RunWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*RunWorkloadRequest) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RunWorkloadRequest) GetAgentenvLaunch() *aenvexecutorpb.LaunchSpec {
+	if x != nil {
+		return x.AgentenvLaunch
+	}
+	return nil
+}
+
+func (x *RunWorkloadRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *RunWorkloadRequest) GetAtespace() string {
@@ -1138,14 +1170,16 @@ func (*RunWorkloadResponse) Descriptor() ([]byte, []int) {
 }
 
 type CheckpointWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Execution             *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,12,opt,name=execution,proto3" json:"execution,omitempty"`
+	Atespace              string                             `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                             `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                             `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                             `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                             `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	RunscPath             string                             `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	Spec                  *WorkloadSpec                      `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI of the snapshot to write. Object names are appended
 	// to it, so it addresses the snapshot as a whole rather than any one object.
 	//
@@ -1195,6 +1229,13 @@ func (x *CheckpointWorkloadRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use CheckpointWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*CheckpointWorkloadRequest) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *CheckpointWorkloadRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *CheckpointWorkloadRequest) GetAtespace() string {
@@ -1332,14 +1373,18 @@ func (x *CheckpointWorkloadResponse) GetDataSnapshotFiles() []string {
 }
 
 type RestoreWorkloadRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Atespace              string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath             string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	AgentenvLaunch *aenvexecutorpb.LaunchSpec `protobuf:"bytes,19,opt,name=agentenv_launch,json=agentenvLaunch,proto3" json:"agentenv_launch,omitempty"`
+	// +k8s:opaqueType
+	Execution             *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,18,opt,name=execution,proto3" json:"execution,omitempty"`
+	Atespace              string                             `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                             `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                             `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                             `protobuf:"bytes,4,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                             `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	RunscPath             string                             `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	Spec                  *WorkloadSpec                      `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI of the snapshot to restore. Object names are
 	// appended to it; it addresses the snapshot, not any one object.
 	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
@@ -1392,6 +1437,20 @@ func (x *RestoreWorkloadRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RestoreWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*RestoreWorkloadRequest) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *RestoreWorkloadRequest) GetAgentenvLaunch() *aenvexecutorpb.LaunchSpec {
+	if x != nil {
+		return x.AgentenvLaunch
+	}
+	return nil
+}
+
+func (x *RestoreWorkloadRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *RestoreWorkloadRequest) GetAtespace() string {
@@ -1892,7 +1951,7 @@ var File_ateom_proto protoreflect.FileDescriptor
 
 const file_ateom_proto_rawDesc = "" +
 	"\n" +
-	"\vateom.proto\x12\x05ateom\"\xb7\x02\n" +
+	"\vateom.proto\x12\x05ateom\x1a\x0eexecutor.proto\"\xb7\x02\n" +
 	"\tActorDirs\x12\x19\n" +
 	"\broot_dir\x18\x01 \x01(\tR\arootDir\x12$\n" +
 	"\x0eoci_bundle_dir\x18\x02 \x01(\tR\fociBundleDir\x12%\n" +
@@ -1902,8 +1961,9 @@ const file_ateom_proto_rawDesc = "" +
 	"\x1ddurable_dir_volume_mounts_dir\x18\x05 \x01(\tR\x19durableDirVolumeMountsDir\x12>\n" +
 	"\x1csystem_info_volume_roots_dir\x18\x06 \x01(\tR\x18systemInfoVolumeRootsDir\x12\x1f\n" +
 	"\vvolumes_dir\x18\a \x01(\tR\n" +
-	"volumesDir\"\xd3\x02\n" +
-	"\x18TerminateWorkloadRequest\x12\x1a\n" +
+	"volumesDir\"\x9b\x03\n" +
+	"\x18TerminateWorkloadRequest\x12F\n" +
+	"\texecution\x18\t \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
@@ -1915,8 +1975,10 @@ const file_ateom_proto_rawDesc = "" +
 	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12/\n" +
 	"\n" +
 	"actor_dirs\x18\b \x01(\v2\x10.ateom.ActorDirsR\tactorDirs\"\x1b\n" +
-	"\x19TerminateWorkloadResponse\"\x8a\x05\n" +
-	"\x12RunWorkloadRequest\x12\x1a\n" +
+	"\x19TerminateWorkloadResponse\"\x9d\x06\n" +
+	"\x12RunWorkloadRequest\x12I\n" +
+	"\x0fagentenv_launch\x18\x0f \x01(\v2 .agentenv.executor.v1.LaunchSpecR\x0eagentenvLaunch\x12F\n" +
+	"\texecution\x18\x0e \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
@@ -1976,8 +2038,9 @@ const file_ateom_proto_rawDesc = "" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
-	"\x13RunWorkloadResponse\"\xd2\x04\n" +
-	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
+	"\x13RunWorkloadResponse\"\x9a\x05\n" +
+	"\x19CheckpointWorkloadRequest\x12F\n" +
+	"\texecution\x18\f \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
@@ -1998,8 +2061,10 @@ const file_ateom_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x93\x06\n" +
-	"\x16RestoreWorkloadRequest\x12\x1a\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xa6\a\n" +
+	"\x16RestoreWorkloadRequest\x12I\n" +
+	"\x0fagentenv_launch\x18\x13 \x01(\v2 .agentenv.executor.v1.LaunchSpecR\x0eagentenvLaunch\x12F\n" +
+	"\texecution\x18\x12 \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
@@ -2050,18 +2115,24 @@ const file_ateom_proto_rawDesc = "" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x02*b\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x02*~\n" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +
-	"\x15SANDBOX_CLASS_MICROVM\x10\x02*b\n" +
+	"\x15SANDBOX_CLASS_MICROVM\x10\x02\x12\x1a\n" +
+	"\x16SANDBOX_CLASS_AGENTENV\x10\x03*b\n" +
 	"\vStatsSource\x12\x1c\n" +
 	"\x18STATS_SOURCE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13STATS_SOURCE_CGROUP\x10\x01\x12\x1c\n" +
-	"\x18STATS_SOURCE_GUEST_AGENT\x10\x022\x9a\x04\n" +
-	"\x05Ateom\x12F\n" +
+	"\x18STATS_SOURCE_GUEST_AGENT\x10\x022\xc0\b\n" +
+	"\x05Ateom\x12h\n" +
+	"\x0fReadRuntimeInfo\x12,.agentenv.executor.v1.ReadRuntimeInfoRequest\x1a%.agentenv.executor.v1.InspectResponse\"\x00\x12d\n" +
+	"\x0eReadGuestStats\x12+.agentenv.executor.v1.ReadGuestStatsRequest\x1a#.agentenv.executor.v1.StatsResponse\"\x00\x12y\n" +
+	"\x12ApplyNetworkPolicy\x12/.agentenv.executor.v1.ApplyNetworkPolicyRequest\x1a0.agentenv.executor.v1.ApplyNetworkPolicyResponse\"\x00\x12\x7f\n" +
+	"\x14ApplyExtensionParams\x121.agentenv.executor.v1.ApplyExtensionParamsRequest\x1a2.agentenv.executor.v1.ApplyExtensionParamsResponse\"\x00\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
-	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +
+	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12X\n" +
+	"\x0fCaptureWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +
 	"\x0fRestoreWorkload\x12\x1d.ateom.RestoreWorkloadRequest\x1a\x1e.ateom.RestoreWorkloadResponse\"\x00\x12U\n" +
 	"\x10GetWorkloadStats\x12\x1e.ateom.GetWorkloadStatsRequest\x1a\x1f.ateom.GetWorkloadStatsResponse\"\x00\x12g\n" +
 	"\x16GetActiveWorkloadStats\x12$.ateom.GetActiveWorkloadStatsRequest\x1a%.ateom.GetActiveWorkloadStatsResponse\"\x00\x12X\n" +
@@ -2082,80 +2153,106 @@ func file_ateom_proto_rawDescGZIP() []byte {
 var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_ateom_proto_goTypes = []any{
-	(SnapshotScope)(0),                     // 0: ateom.SnapshotScope
-	(SandboxClass)(0),                      // 1: ateom.SandboxClass
-	(StatsSource)(0),                       // 2: ateom.StatsSource
-	(*ActorDirs)(nil),                      // 3: ateom.ActorDirs
-	(*TerminateWorkloadRequest)(nil),       // 4: ateom.TerminateWorkloadRequest
-	(*TerminateWorkloadResponse)(nil),      // 5: ateom.TerminateWorkloadResponse
-	(*RunWorkloadRequest)(nil),             // 6: ateom.RunWorkloadRequest
-	(*EgressGateway)(nil),                  // 7: ateom.EgressGateway
-	(*WorkloadSpec)(nil),                   // 8: ateom.WorkloadSpec
-	(*Container)(nil),                      // 9: ateom.Container
-	(*VolumeMount)(nil),                    // 10: ateom.VolumeMount
-	(*DurableDirVolumeMount)(nil),          // 11: ateom.DurableDirVolumeMount
-	(*SystemInfoVolumeMount)(nil),          // 12: ateom.SystemInfoVolumeMount
-	(*ImageVolumeMount)(nil),               // 13: ateom.ImageVolumeMount
-	(*WakeupProbe)(nil),                    // 14: ateom.WakeupProbe
-	(*HTTPGetAction)(nil),                  // 15: ateom.HTTPGetAction
-	(*RunWorkloadResponse)(nil),            // 16: ateom.RunWorkloadResponse
-	(*CheckpointWorkloadRequest)(nil),      // 17: ateom.CheckpointWorkloadRequest
-	(*CheckpointWorkloadResponse)(nil),     // 18: ateom.CheckpointWorkloadResponse
-	(*RestoreWorkloadRequest)(nil),         // 19: ateom.RestoreWorkloadRequest
-	(*RestoreWorkloadResponse)(nil),        // 20: ateom.RestoreWorkloadResponse
-	(*GetWorkloadStatsRequest)(nil),        // 21: ateom.GetWorkloadStatsRequest
-	(*WorkloadStatsSample)(nil),            // 22: ateom.WorkloadStatsSample
-	(*GetWorkloadStatsResponse)(nil),       // 23: ateom.GetWorkloadStatsResponse
-	(*GetActiveWorkloadStatsRequest)(nil),  // 24: ateom.GetActiveWorkloadStatsRequest
-	(*GetActiveWorkloadStatsResponse)(nil), // 25: ateom.GetActiveWorkloadStatsResponse
-	nil,                                    // 26: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 27: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                    // 28: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(SnapshotScope)(0),                                  // 0: ateom.SnapshotScope
+	(SandboxClass)(0),                                   // 1: ateom.SandboxClass
+	(StatsSource)(0),                                    // 2: ateom.StatsSource
+	(*ActorDirs)(nil),                                   // 3: ateom.ActorDirs
+	(*TerminateWorkloadRequest)(nil),                    // 4: ateom.TerminateWorkloadRequest
+	(*TerminateWorkloadResponse)(nil),                   // 5: ateom.TerminateWorkloadResponse
+	(*RunWorkloadRequest)(nil),                          // 6: ateom.RunWorkloadRequest
+	(*EgressGateway)(nil),                               // 7: ateom.EgressGateway
+	(*WorkloadSpec)(nil),                                // 8: ateom.WorkloadSpec
+	(*Container)(nil),                                   // 9: ateom.Container
+	(*VolumeMount)(nil),                                 // 10: ateom.VolumeMount
+	(*DurableDirVolumeMount)(nil),                       // 11: ateom.DurableDirVolumeMount
+	(*SystemInfoVolumeMount)(nil),                       // 12: ateom.SystemInfoVolumeMount
+	(*ImageVolumeMount)(nil),                            // 13: ateom.ImageVolumeMount
+	(*WakeupProbe)(nil),                                 // 14: ateom.WakeupProbe
+	(*HTTPGetAction)(nil),                               // 15: ateom.HTTPGetAction
+	(*RunWorkloadResponse)(nil),                         // 16: ateom.RunWorkloadResponse
+	(*CheckpointWorkloadRequest)(nil),                   // 17: ateom.CheckpointWorkloadRequest
+	(*CheckpointWorkloadResponse)(nil),                  // 18: ateom.CheckpointWorkloadResponse
+	(*RestoreWorkloadRequest)(nil),                      // 19: ateom.RestoreWorkloadRequest
+	(*RestoreWorkloadResponse)(nil),                     // 20: ateom.RestoreWorkloadResponse
+	(*GetWorkloadStatsRequest)(nil),                     // 21: ateom.GetWorkloadStatsRequest
+	(*WorkloadStatsSample)(nil),                         // 22: ateom.WorkloadStatsSample
+	(*GetWorkloadStatsResponse)(nil),                    // 23: ateom.GetWorkloadStatsResponse
+	(*GetActiveWorkloadStatsRequest)(nil),               // 24: ateom.GetActiveWorkloadStatsRequest
+	(*GetActiveWorkloadStatsResponse)(nil),              // 25: ateom.GetActiveWorkloadStatsResponse
+	nil,                                                 // 26: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                                 // 27: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                                 // 28: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(*aenvexecutorpb.LifecycleOperation)(nil),           // 29: agentenv.executor.v1.LifecycleOperation
+	(*aenvexecutorpb.LaunchSpec)(nil),                   // 30: agentenv.executor.v1.LaunchSpec
+	(*aenvexecutorpb.ReadRuntimeInfoRequest)(nil),       // 31: agentenv.executor.v1.ReadRuntimeInfoRequest
+	(*aenvexecutorpb.ReadGuestStatsRequest)(nil),        // 32: agentenv.executor.v1.ReadGuestStatsRequest
+	(*aenvexecutorpb.ApplyNetworkPolicyRequest)(nil),    // 33: agentenv.executor.v1.ApplyNetworkPolicyRequest
+	(*aenvexecutorpb.ApplyExtensionParamsRequest)(nil),  // 34: agentenv.executor.v1.ApplyExtensionParamsRequest
+	(*aenvexecutorpb.InspectResponse)(nil),              // 35: agentenv.executor.v1.InspectResponse
+	(*aenvexecutorpb.StatsResponse)(nil),                // 36: agentenv.executor.v1.StatsResponse
+	(*aenvexecutorpb.ApplyNetworkPolicyResponse)(nil),   // 37: agentenv.executor.v1.ApplyNetworkPolicyResponse
+	(*aenvexecutorpb.ApplyExtensionParamsResponse)(nil), // 38: agentenv.executor.v1.ApplyExtensionParamsResponse
 }
 var file_ateom_proto_depIdxs = []int32{
-	8,  // 0: ateom.TerminateWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	3,  // 1: ateom.TerminateWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
-	8,  // 2: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	26, // 3: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	7,  // 4: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
-	3,  // 5: ateom.RunWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
-	9,  // 6: ateom.WorkloadSpec.containers:type_name -> ateom.Container
-	14, // 7: ateom.Container.wakeup_probe:type_name -> ateom.WakeupProbe
-	11, // 8: ateom.Container.durable_dir_volume_mounts:type_name -> ateom.DurableDirVolumeMount
-	10, // 9: ateom.Container.csi_volume_mounts:type_name -> ateom.VolumeMount
-	12, // 10: ateom.Container.system_info_volume_mounts:type_name -> ateom.SystemInfoVolumeMount
-	13, // 11: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
-	15, // 12: ateom.WakeupProbe.http_get:type_name -> ateom.HTTPGetAction
-	8,  // 13: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	27, // 14: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 15: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	3,  // 16: ateom.CheckpointWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
-	8,  // 17: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	28, // 18: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 19: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	7,  // 20: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
-	3,  // 21: ateom.RestoreWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
-	1,  // 22: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass
-	2,  // 23: ateom.WorkloadStatsSample.source:type_name -> ateom.StatsSource
-	22, // 24: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
-	22, // 25: ateom.GetActiveWorkloadStatsResponse.samples:type_name -> ateom.WorkloadStatsSample
-	6,  // 26: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
-	17, // 27: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
-	19, // 28: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
-	21, // 29: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
-	24, // 30: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
-	4,  // 31: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
-	16, // 32: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
-	18, // 33: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
-	20, // 34: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
-	23, // 35: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
-	25, // 36: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
-	5,  // 37: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
-	32, // [32:38] is the sub-list for method output_type
-	26, // [26:32] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	29, // 0: ateom.TerminateWorkloadRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	8,  // 1: ateom.TerminateWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	3,  // 2: ateom.TerminateWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
+	30, // 3: ateom.RunWorkloadRequest.agentenv_launch:type_name -> agentenv.executor.v1.LaunchSpec
+	29, // 4: ateom.RunWorkloadRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	8,  // 5: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	26, // 6: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	7,  // 7: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
+	3,  // 8: ateom.RunWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
+	9,  // 9: ateom.WorkloadSpec.containers:type_name -> ateom.Container
+	14, // 10: ateom.Container.wakeup_probe:type_name -> ateom.WakeupProbe
+	11, // 11: ateom.Container.durable_dir_volume_mounts:type_name -> ateom.DurableDirVolumeMount
+	10, // 12: ateom.Container.csi_volume_mounts:type_name -> ateom.VolumeMount
+	12, // 13: ateom.Container.system_info_volume_mounts:type_name -> ateom.SystemInfoVolumeMount
+	13, // 14: ateom.Container.image_volume_mounts:type_name -> ateom.ImageVolumeMount
+	15, // 15: ateom.WakeupProbe.http_get:type_name -> ateom.HTTPGetAction
+	29, // 16: ateom.CheckpointWorkloadRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	8,  // 17: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	27, // 18: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	0,  // 19: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
+	3,  // 20: ateom.CheckpointWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
+	30, // 21: ateom.RestoreWorkloadRequest.agentenv_launch:type_name -> agentenv.executor.v1.LaunchSpec
+	29, // 22: ateom.RestoreWorkloadRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	8,  // 23: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	28, // 24: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	0,  // 25: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
+	7,  // 26: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
+	3,  // 27: ateom.RestoreWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
+	1,  // 28: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass
+	2,  // 29: ateom.WorkloadStatsSample.source:type_name -> ateom.StatsSource
+	22, // 30: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
+	22, // 31: ateom.GetActiveWorkloadStatsResponse.samples:type_name -> ateom.WorkloadStatsSample
+	31, // 32: ateom.Ateom.ReadRuntimeInfo:input_type -> agentenv.executor.v1.ReadRuntimeInfoRequest
+	32, // 33: ateom.Ateom.ReadGuestStats:input_type -> agentenv.executor.v1.ReadGuestStatsRequest
+	33, // 34: ateom.Ateom.ApplyNetworkPolicy:input_type -> agentenv.executor.v1.ApplyNetworkPolicyRequest
+	34, // 35: ateom.Ateom.ApplyExtensionParams:input_type -> agentenv.executor.v1.ApplyExtensionParamsRequest
+	6,  // 36: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
+	17, // 37: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
+	17, // 38: ateom.Ateom.CaptureWorkload:input_type -> ateom.CheckpointWorkloadRequest
+	19, // 39: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
+	21, // 40: ateom.Ateom.GetWorkloadStats:input_type -> ateom.GetWorkloadStatsRequest
+	24, // 41: ateom.Ateom.GetActiveWorkloadStats:input_type -> ateom.GetActiveWorkloadStatsRequest
+	4,  // 42: ateom.Ateom.TerminateWorkload:input_type -> ateom.TerminateWorkloadRequest
+	35, // 43: ateom.Ateom.ReadRuntimeInfo:output_type -> agentenv.executor.v1.InspectResponse
+	36, // 44: ateom.Ateom.ReadGuestStats:output_type -> agentenv.executor.v1.StatsResponse
+	37, // 45: ateom.Ateom.ApplyNetworkPolicy:output_type -> agentenv.executor.v1.ApplyNetworkPolicyResponse
+	38, // 46: ateom.Ateom.ApplyExtensionParams:output_type -> agentenv.executor.v1.ApplyExtensionParamsResponse
+	16, // 47: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
+	18, // 48: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
+	18, // 49: ateom.Ateom.CaptureWorkload:output_type -> ateom.CheckpointWorkloadResponse
+	20, // 50: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
+	23, // 51: ateom.Ateom.GetWorkloadStats:output_type -> ateom.GetWorkloadStatsResponse
+	25, // 52: ateom.Ateom.GetActiveWorkloadStats:output_type -> ateom.GetActiveWorkloadStatsResponse
+	5,  // 53: ateom.Ateom.TerminateWorkload:output_type -> ateom.TerminateWorkloadResponse
+	43, // [43:54] is the sub-list for method output_type
+	32, // [32:43] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_ateom_proto_init() }

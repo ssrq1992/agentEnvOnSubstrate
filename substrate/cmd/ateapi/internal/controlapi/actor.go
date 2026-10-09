@@ -99,11 +99,24 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			}
 		}
 	}
+	if inActor.GetSourceTagUid() != "" && inActor.GetSourceTag() == nil {
+		return nil, apierror.InvalidArgument("source_tag_uid requires source_tag")
+	}
 	var sourceTag *ateapipb.Tag
 	if tagRef != nil {
+		// Keep the borrowed snapshot alive until the Actor reference is durable.
+		var tagLease *store.Lease
+		ctx, tagLease, err = acquireTagLease(ctx, s.store, resources.TagRefFromObjectRef(tagRef))
+		if err != nil {
+			return nil, err
+		}
+		defer tagLease.Close()
 		sourceTag, err = s.resolveTagSource(ctx, inActor.GetMetadata().GetAtespace(), tagRef, template)
 		if err != nil {
 			return nil, err
+		}
+		if inActor.GetSourceTagUid() != "" && sourceTag.GetMetadata().GetUid() != inActor.GetSourceTagUid() {
+			return nil, apierror.FailedPrecondition("source Tag incarnation changed")
 		}
 		if inActor.GetSourceTag() == nil {
 			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
@@ -485,7 +498,7 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
+	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetUid(), req.SourceSnapshotUri)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -507,7 +520,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, req.GetUid(), req.AssignmentGeneration)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")

@@ -62,7 +62,7 @@ function codegen::protobuf() {
         (
             cd "${dir}" || exit 1
             "${ROOT}"/hack/protoc.sh \
-                -I "${ROOT}" -I . \
+                -I "${ROOT}" -I . -I "${ROOT}/pkg/proto/ateapipb" -I "${AGENTENV_SOURCE_DIR:-${ROOT}/../AgentENV}/protocols/aenv-executor/v1" \
                 --plugin=protoc-gen-go="${protoc_gen_go}" \
                 --plugin=protoc-gen-go-grpc="${protoc_gen_go_rpc}" \
                 --go_out=paths=source_relative:. \
@@ -72,6 +72,7 @@ function codegen::protobuf() {
     done
 }
 codegen::protobuf
+bash "${ROOT}/hack/update/agentenv-proto.sh"
 
 function codegen::validation() {
     local validation_dirs=()

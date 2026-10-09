@@ -23,6 +23,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/proto/aenvexecutorpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -371,6 +372,7 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 // handler can be handed. TestOurProtoFilesAreAllListed keeps it in step with
 // the .proto files on disk.
 var ourProtoFiles = []protoreflect.FileDescriptor{
+	aenvexecutorpb.File_executor_proto,
 	ateapipb.File_ateapi_proto,
 	ateletpb.File_atelet_proto,
 	ateompb.File_ateom_proto,
@@ -409,12 +411,16 @@ func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
 // change is reviewed as a deliberate decision about what the logs may show.
 func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
-		"ateapi.EnvVar.value":                                    true,
-		"ateapi.MintActorJWTResponse.actor_jwt":                  true,
-		"atelet.EnvEntry.value":                                  true,
-		"credprovider.FetchSecretResponse.opaque_bytes":          true,
-		"objectstoresnapshot.v1.FetchSnapshotRequest.actor_jwt":  true,
-		"objectstoresnapshot.v1.UploadSnapshotRequest.actor_jwt": true,
+		"ateapi.ConnectActorResponse.envd_access_token":           true,
+		"atelet.ReadAgentENVConnectionResponse.envd_access_token": true,
+		"agentenv.executor.v1.LaunchSpec.envd_access_token":       true,
+		"agentenv.executor.v1.EnvVar.value":                       true,
+		"ateapi.EnvVar.value":                                     true,
+		"ateapi.MintActorJWTResponse.actor_jwt":                   true,
+		"atelet.EnvEntry.value":                                   true,
+		"credprovider.FetchSecretResponse.opaque_bytes":           true,
+		"objectstoresnapshot.v1.FetchSnapshotRequest.actor_jwt":   true,
+		"objectstoresnapshot.v1.UploadSnapshotRequest.actor_jwt":  true,
 	}
 	got := map[string]bool{}
 	forEachField(func(fd protoreflect.FieldDescriptor) {
@@ -494,6 +500,23 @@ func TestOurProtoFilesAreAllListed(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestAgentENVConnectionAndLaunchSecretsAreMasked(t *testing.T) {
+	for _, message := range []proto.Message{
+		&ateapipb.ConnectActorResponse{EnvdAccessToken: "secret-token"},
+		&ateletpb.ReadAgentENVConnectionResponse{EnvdAccessToken: "secret-token"},
+		&ateompb.RunWorkloadRequest{AgentenvLaunch: &aenvexecutorpb.LaunchSpec{EnvdAccessToken: "secret-token", Env: []*aenvexecutorpb.EnvVar{{Name: "KEY", Value: "secret-env"}}}},
+	} {
+		original := proto.Clone(message)
+		masked, changed := protoredact.Redacted(message)
+		if !changed || strings.Contains(masked.ProtoReflect().Interface().(interface{ String() string }).String(), "secret-") {
+			t.Fatalf("%T exposes runtime secrets", message)
+		}
+		if !proto.Equal(message, original) {
+			t.Fatalf("%T redaction changed live payload", message)
 		}
 	}
 }

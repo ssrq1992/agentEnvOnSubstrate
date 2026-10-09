@@ -155,6 +155,11 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 // does not point here is left over from an operation that failed partway, and
 // is released.
 func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment, epoch int64) error {
+	// A new executor epoch only invalidates requests. It is not a physical
+	// fence for a VM or a ublk device that survived a process restart.
+	if worker.GetSandboxClass() == "agentenv" || assignment.GetExecutorInstanceId() != "" {
+		return fmt.Errorf("AgentENV prior assignment requires confirmed stop or node fencing")
+	}
 	name := worker.GetMetadata().GetName()
 	release := func() error {
 		if _, err := w.store.ReleaseActorFromWorker(ctx, name, assignment.GetActorUid()); err != nil {

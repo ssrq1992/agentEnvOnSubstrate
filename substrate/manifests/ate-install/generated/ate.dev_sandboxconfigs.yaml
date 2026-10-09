@@ -129,6 +129,7 @@ spec:
                 enum:
                 - gvisor
                 - microvm
+                - agentenv
                 type: string
             required:
             - sandboxClass

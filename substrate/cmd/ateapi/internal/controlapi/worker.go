@@ -123,8 +123,8 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 }
 
 func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worker) (*ateapipb.Worker, error) {
-	// A Worker is registered only once its pod is Ready and has an IP, which
-	// makes ACTIVE the only state it can be born in.
+	// Registration creates an ACTIVE identity. AgentENV may register before
+	// readiness, but placement requires its separate executor registration.
 	outWorker := proto.CloneOf(inWorker)
 	// A new Worker hosts no Actors, so none are left from an earlier epoch.
 	outWorker.Status = &ateapipb.WorkerStatus{

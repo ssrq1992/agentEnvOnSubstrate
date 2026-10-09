@@ -113,6 +113,13 @@ pub struct UblkDaemonClient {
     inner: Arc<UblkDaemonClientInner>,
 }
 
+#[derive(Clone, Debug)]
+pub struct DeviceLedgerConfig {
+    pub root: PathBuf,
+    pub owner: String,
+    pub max_devices: usize,
+}
+
 pub struct UblkDaemonSpawnConfig<'a> {
     pub binary_path: &'a Path,
     pub socket_path: PathBuf,
@@ -124,6 +131,7 @@ pub struct UblkDaemonSpawnConfig<'a> {
     pub pool_config: Option<&'a PoolConfig>,
     pub p2p_publish_url: Option<&'a str>,
     pub runtime_device_timeout: Duration,
+    pub device_ledger: Option<&'a DeviceLedgerConfig>,
 }
 
 struct UblkDaemonClientInner {
@@ -132,6 +140,8 @@ struct UblkDaemonClientInner {
     daemon_dead: AtomicBool,
     /// Retains completion so shutdown callers cannot miss the watchdog's exit.
     daemon_exited: tokio::sync::watch::Sender<bool>,
+    /// Only a successful process exit can acknowledge device cleanup.
+    daemon_exit_success: AtomicBool,
     /// Set to `true` when `shutdown()` is called, so the watchdog task
     /// doesn't log the expected exit as an error.
     shutting_down: AtomicBool,
@@ -177,6 +187,15 @@ impl UblkDaemonClient {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit());
 
+        if let Some(ledger) = config.device_ledger {
+            cmd.arg("--device-ledger")
+                .arg(&ledger.root)
+                .arg("--device-owner")
+                .arg(&ledger.owner)
+                .arg("--max-devices")
+                .arg(ledger.max_devices.to_string());
+        }
+
         // Keep the daemon out of the server's foreground process group.
         // Otherwise a terminal Ctrl+C sends SIGINT to both agentenv and the
         // ublk daemon, interrupting snapshot/restack RPCs during graceful
@@ -201,15 +220,14 @@ impl UblkDaemonClient {
         }
 
         if let Some(pool_config) = config.pool_config {
-            if config.app_config.is_none() {
-                cmd.arg("--enable-pool")
-                    .arg("--pool-low-watermark")
-                    .arg(pool_config.low_watermark.to_string())
-                    .arg("--pool-high-watermark")
-                    .arg(pool_config.high_watermark.to_string())
-                    .arg("--pool-startup-prewarm")
-                    .arg(pool_config.startup_prewarm.to_string());
-            }
+            // Explicit runtime limits override TOML even when --config is used.
+            cmd.arg("--enable-pool")
+                .arg("--pool-low-watermark")
+                .arg(pool_config.low_watermark.to_string())
+                .arg("--pool-high-watermark")
+                .arg(pool_config.high_watermark.to_string())
+                .arg("--pool-startup-prewarm")
+                .arg(pool_config.startup_prewarm.to_string());
         }
 
         let mut child = cmd
@@ -228,6 +246,7 @@ impl UblkDaemonClient {
                 socket_path: config.socket_path,
                 daemon_dead: AtomicBool::new(false),
                 daemon_exited: tokio::sync::watch::channel(false).0,
+                daemon_exit_success: AtomicBool::new(false),
                 shutting_down: AtomicBool::new(false),
                 death_reason: Mutex::new(None),
                 runtime_device_timeout: config.runtime_device_timeout,
@@ -326,6 +345,10 @@ impl UblkDaemonClient {
             }
 
             *inner.death_reason.lock().unwrap() = Some(reason);
+            inner.daemon_exit_success.store(
+                status.as_ref().is_ok_and(|exit| exit.success()),
+                Ordering::Release,
+            );
             inner.daemon_dead.store(true, Ordering::Release);
             inner.daemon_exited.send_replace(true);
         });
@@ -600,12 +623,22 @@ impl UblkDaemonClient {
         let _ = self
             .call(DaemonRequest::Shutdown, Duration::from_secs(5))
             .await;
-        self.inner
-            .daemon_exited
-            .subscribe()
-            .wait_for(|exited| *exited)
+        let mut exited = self.inner.daemon_exited.subscribe();
+        tokio::time::timeout(READY_TIMEOUT, exited.wait_for(|exited| *exited))
             .await
+            .context("ublk daemon cleanup timed out; device ownership is unknown")?
             .context("wait for ublk daemon exit")?;
+        if !self.inner.daemon_exit_success.load(Ordering::Acquire) {
+            bail!(
+                "ublk cleanup was not confirmed: {}",
+                self.inner
+                    .death_reason
+                    .lock()
+                    .unwrap()
+                    .as_deref()
+                    .unwrap_or("unknown exit")
+            );
+        }
         Ok(())
     }
 
@@ -753,6 +786,7 @@ impl UblkDaemonClient {
                 socket_path,
                 daemon_dead: AtomicBool::new(daemon_dead),
                 daemon_exited: tokio::sync::watch::channel(true).0,
+                daemon_exit_success: AtomicBool::new(false),
                 shutting_down: AtomicBool::new(false),
                 death_reason: Mutex::new(if daemon_dead {
                     Some("test: daemon marked dead".into())
@@ -768,6 +802,27 @@ impl UblkDaemonClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shutdown_rejects_failed_or_unknown_process_exit() {
+        let client = UblkDaemonClient::new_for_test(PathBuf::from("/not-running.sock"), true);
+        assert!(client.shutdown().await.is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let client = UblkDaemonClient::new_for_test(dir.path().join("not-running.sock"), true);
+        client.inner.daemon_exited.send_replace(false);
+        let child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+        UblkDaemonClient::spawn_watchdog(client.inner.clone(), child);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), client.shutdown())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(client.shutdown().await.is_err());
+    }
 
     #[tokio::test]
     async fn shutdown_waits_for_child_exit_after_rpc_ack() {

@@ -37,7 +37,7 @@ import (
 // snapshot is uploaded. Idempotent: a re-entered workflow fast-forwards past
 // the steps a previous attempt completed, deriving progress from the
 // persisted actor alone.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, uid string, generation *uint64) (_ *ateapipb.Actor, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate
@@ -64,12 +64,24 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	if err != nil {
 		return nil, err
 	}
+	if generation != nil && uid == "" {
+		return nil, apierror.InvalidArgument("Actor UID required with assignment generation")
+	}
+	if uid != "" && actor.GetMetadata().GetUid() != uid {
+		return nil, apierror.FailedPrecondition("Actor incarnation changed")
+	}
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		// Fully suspended already: FinalizeSuspended commits SUSPENDED and the
 		// cleared worker assignment in a single update, so there is nothing
 		// left to do. This success reports no pool, and cannot: the previous
 		// attempt released the worker, so the record names none (#957).
 		return actor, nil
+	}
+	if generation != nil && actor.GetStatus().GetWorkerAssignment().GetAssignmentGeneration() != *generation {
+		return nil, apierror.FailedPrecondition("Actor allocation changed before suspend")
+	}
+	if err := requireConfirmedExtensions(actor); err != nil {
+		return nil, err
 	}
 	// Decided before marking: once SUSPENDING is committed, the loaded status
 	// alone can no longer tell the two origins apart.
@@ -212,6 +224,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
+		Execution:             executionIdentity(actor, "suspend", actor.GetStatus().GetInProgressSnapshotUri()),
 		TargetAteomUid:        assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),

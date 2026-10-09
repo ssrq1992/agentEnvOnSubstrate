@@ -26,6 +26,14 @@ struct Cli {
     #[arg(long)]
     socket_path: PathBuf,
 
+    /// Embedded Worker ownership ledger; all three options must be supplied.
+    #[arg(long, requires_all = ["device_owner", "max_devices"])]
+    device_ledger: Option<PathBuf>,
+    #[arg(long, requires = "device_ledger")]
+    device_owner: Option<String>,
+    #[arg(long, requires = "device_ledger")]
+    max_devices: Option<usize>,
+
     /// Path to overlaybd global config JSON.
     #[arg(long)]
     global_config: PathBuf,
@@ -254,6 +262,13 @@ fn apply_pool_overrides(
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(root) = &cli.device_ledger {
+        uvm_ublk_daemon::device_ledger::install(
+            root,
+            cli.device_owner.clone().context("device owner required")?,
+            cli.max_devices.context("device budget required")?,
+        )?;
+    }
 
     uvm_ublk::setup_tracing(cli.log_file.clone(), cli.log_level).context("setup tracing")?;
 

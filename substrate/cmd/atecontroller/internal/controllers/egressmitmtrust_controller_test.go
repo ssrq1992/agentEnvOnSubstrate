@@ -372,3 +372,35 @@ func TestEgressMITMTrustAPIVersions(t *testing.T) {
 		})
 	}
 }
+
+func TestEgressTrustConfigMapProvider(t *testing.T) {
+	ctx := context.Background()
+	secret, _ := caPoolSecret(t, "test")
+	secret.UID = "pool-uid"
+	c := fake.NewClientBuilder().WithScheme(egressMITMScheme(t)).WithObjects(secret).Build()
+	r := &EgressMITMTrustReconciler{Client: c, SystemNamespace: secret.Namespace, ConfigMapProvider: true}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: secret.Namespace, Name: secret.Name}}
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	bundle := &corev1.ConfigMap{}
+	ref := types.NamespacedName{Namespace: secret.Namespace, Name: "egress-mitm-trust"}
+	if err := c.Get(ctx, ref, bundle); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(bundle.Data["ca.crt"], "BEGIN CERTIFICATE") || strings.Contains(bundle.Data["ca.crt"], "PRIVATE KEY") {
+		t.Fatal("invalid public bundle")
+	}
+	if len(bundle.OwnerReferences) != 1 || bundle.OwnerReferences[0].UID != secret.UID {
+		t.Fatal("missing pool ownership")
+	}
+	if err := c.Delete(ctx, secret); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, ref, &corev1.ConfigMap{}); !k8errors.IsNotFound(err) {
+		t.Fatalf("orphan bundle remained: %v", err)
+	}
+}

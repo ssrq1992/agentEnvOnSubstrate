@@ -14,6 +14,7 @@ pub struct UVMUblkDevBuilder<T: UVMUblkTarget> {
     ctrl: UVMUblkCtrl,
     tgt_name: &'static str,
     tgt: Option<T>,
+    on_allocated: Option<Box<dyn FnOnce(u32) -> Result<()> + Send>>,
 }
 
 impl<T: UVMUblkTarget> UVMUblkDevBuilder<T> {
@@ -22,11 +23,20 @@ impl<T: UVMUblkTarget> UVMUblkDevBuilder<T> {
             ctrl,
             tgt_name: T::DEV_NAME,
             tgt: None,
+            on_allocated: None,
         }
     }
 
     pub fn set_target(mut self, tgt: T) -> Self {
         self.tgt = Some(tgt);
+        self
+    }
+
+    /// Persist ownership immediately after ADD_DEV acknowledges its kernel ID,
+    /// before waiting for udev or opening the char device. On hook failure the
+    /// caller's reservation remains unresolved; never claim creation had no effect.
+    pub fn on_allocated(mut self, hook: impl FnOnce(u32) -> Result<()> + Send + 'static) -> Self {
+        self.on_allocated = Some(Box::new(hook));
         self
     }
 
@@ -44,6 +54,9 @@ impl<T: UVMUblkTarget> UVMUblkDevBuilder<T> {
         ctrl.add_dev()
             .await
             .context("add dev when build UVMUblkDev")?;
+        if let Some(hook) = self.on_allocated {
+            hook(ctrl.dev_info.dev_id).context("record allocated kernel device ownership")?;
+        }
         tracing::info!(
             dev_id = ctrl.dev_info.dev_id,
             zero_copy = (ctrl.dev_info.flags & (ublk_sys::UBLK_F_SUPPORT_ZERO_COPY as u64)) != 0,

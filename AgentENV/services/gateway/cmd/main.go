@@ -112,44 +112,57 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config failed: %v", err)
 	}
-	apiKey, err := loadAPIKey()
-	if err != nil {
-		log.Fatalf("load API key failed: %v", err)
-	}
 	logger, err := logging.New(cfg.LogLevel, cfg.LogFormat)
 	if err != nil {
 		log.Fatalf("init logger failed: %v", err)
 	}
 	defer logger.Sync()
 
-	conn, err := newSchedulerConn(cfg.Gateway.SchedulerAddr)
-	if err != nil {
-		logger.Fatal("connect scheduler failed", zap.Error(err), zap.String("addr", cfg.Gateway.SchedulerAddr))
-	}
-	defer conn.Close()
-
-	schedulerClient := schedulerv1.NewSchedulerClient(conn)
-	queryOnlySchedulerClient := schedulerClient
-	var queryOnlyConn *grpc.ClientConn
-	if cfg.Gateway.QueryOnlySchedulerAddr != "" {
-		queryOnlyConn, err = newSchedulerConn(cfg.Gateway.QueryOnlySchedulerAddr)
+	var handler http.Handler
+	sandboxDomains := cfg.Gateway.SandboxProxyDomains
+	if cfg.Gateway.Mode == "substrate" {
+		handler, err = gateway.NewSubstrateHandler(gateway.SubstrateOptions{URL: cfg.Gateway.BridgeURL, CredentialBundle: cfg.Gateway.BridgeCredentialBundle, TrustBundle: cfg.Gateway.BridgeTrustBundle, ResponseHeaderTimeout: cfg.Gateway.RequestTimeout})
 		if err != nil {
-			logger.Fatal("connect query-only scheduler failed", zap.Error(err), zap.String("addr", cfg.Gateway.QueryOnlySchedulerAddr))
+			logger.Fatal("init Substrate bridge forwarding failed", zap.Error(err))
 		}
-		defer queryOnlyConn.Close()
-		queryOnlySchedulerClient = schedulerv1.NewSchedulerClient(queryOnlyConn)
-	}
+	} else {
+		apiKey, err := loadAPIKey()
+		if err != nil {
+			logger.Fatal("load API key failed", zap.Error(err))
+		}
+		conn, err := newSchedulerConn(cfg.Gateway.SchedulerAddr)
+		if err != nil {
+			logger.Fatal("connect scheduler failed", zap.Error(err), zap.String("addr", cfg.Gateway.SchedulerAddr))
+		}
+		defer conn.Close()
 
-	s, err := gateway.NewServer(logger, schedulerClient, gateway.ServerOptions{
-		RequestTimeout:           cfg.Gateway.RequestTimeout,
-		MaxResponseSize:          cfg.Gateway.ForwardResponseSize,
-		APIKey:                   apiKey,
-		DebugMode:                cfg.Gateway.DebugMode,
-		SandboxProxyDomains:      cfg.Gateway.SandboxProxyDomains,
-		QueryOnlySchedulerClient: queryOnlySchedulerClient,
-	})
-	if err != nil {
-		logger.Fatal("init gateway server failed", zap.Error(err))
+		schedulerClient := schedulerv1.NewSchedulerClient(conn)
+		queryOnlySchedulerClient := schedulerClient
+		var queryOnlyConn *grpc.ClientConn
+		if cfg.Gateway.QueryOnlySchedulerAddr != "" {
+			queryOnlyConn, err = newSchedulerConn(cfg.Gateway.QueryOnlySchedulerAddr)
+			if err != nil {
+				logger.Fatal("connect query-only scheduler failed", zap.Error(err), zap.String("addr", cfg.Gateway.QueryOnlySchedulerAddr))
+			}
+			defer queryOnlyConn.Close()
+			queryOnlySchedulerClient = schedulerv1.NewSchedulerClient(queryOnlyConn)
+		}
+
+		s, err := gateway.NewServer(logger, schedulerClient, gateway.ServerOptions{
+			RequestTimeout:           cfg.Gateway.RequestTimeout,
+			MaxResponseSize:          cfg.Gateway.ForwardResponseSize,
+			APIKey:                   apiKey,
+			DebugMode:                cfg.Gateway.DebugMode,
+			SandboxProxyDomains:      cfg.Gateway.SandboxProxyDomains,
+			QueryOnlySchedulerClient: queryOnlySchedulerClient,
+		})
+		if err != nil {
+			logger.Fatal("init gateway server failed", zap.Error(err))
+		}
+
+		handler = s.Handler()
+		sandboxDomains = s.SandboxProxyDomains()
+
 	}
 
 	logger.Info("gateway listening",
@@ -157,11 +170,11 @@ func main() {
 		zap.String("metrics_addr", cfg.Gateway.MetricsListenAddr),
 		zap.String("scheduler", cfg.Gateway.SchedulerAddr),
 		zap.String("query_only_scheduler", cfg.Gateway.QueryOnlySchedulerAddr),
-		zap.Strings("sandbox_proxy_domains", s.SandboxProxyDomains()),
+		zap.Strings("sandbox_proxy_domains", sandboxDomains),
 	)
 	httpServer := &http.Server{
 		Addr:    cfg.Gateway.HTTPListenAddr,
-		Handler: s.Handler(),
+		Handler: handler,
 	}
 	metricsServer := &http.Server{
 		Addr:    cfg.Gateway.MetricsListenAddr,

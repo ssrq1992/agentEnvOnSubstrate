@@ -1039,3 +1039,45 @@ func TestValidateMintActorJWTRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateGetActorGuestMetricsRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, space, nameValue, uid string
+		valid                       bool
+	}{
+		{"valid", "team", "actor", "uid", true},
+		{"space missing", "", "actor", "uid", false},
+		{"name missing", "team", "", "uid", false},
+		{"uid missing", "team", "actor", "", false},
+		{"uid too long", "team", "actor", strings.Repeat("a", 129), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateGetActorGuestMetricsRequest(t.Context(), &ateapipb.GetActorGuestMetricsRequest{Actor: &ateapipb.ObjectRef{Atespace: tc.space, Name: tc.nameValue}, Uid: tc.uid})
+			if (len(errs) == 0) != tc.valid {
+				t.Fatal(errs)
+			}
+		})
+	}
+}
+
+func TestValidateCaptureActorSnapshotRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, space, actor, uid, tag string
+		generation                   uint64
+		valid                        bool
+	}{
+		{"valid", "team-a", "source", "01900000-0000-7000-8000-000000000009", "capture", 1, true},
+		{"space", "", "source", "01900000-0000-7000-8000-000000000009", "capture", 1, false},
+		{"actor", "team-a", "", "01900000-0000-7000-8000-000000000009", "capture", 1, false},
+		{"uid", "team-a", "source", "invalid", "capture", 1, false},
+		{"generation", "team-a", "source", "01900000-0000-7000-8000-000000000009", "capture", 0, false},
+		{"tag", "team-a", "source", "01900000-0000-7000-8000-000000000009", "BAD/TAG", 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateCaptureActorSnapshotRequest(t.Context(), &ateapipb.CaptureActorSnapshotRequest{Actor: &ateapipb.ObjectRef{Atespace: tc.space, Name: tc.actor}, Uid: tc.uid, TagName: tc.tag, AssignmentGeneration: tc.generation})
+			if (len(errs) == 0) != tc.valid {
+				t.Fatalf("valid=%v errors=%v", tc.valid, errs)
+			}
+		})
+	}
+}

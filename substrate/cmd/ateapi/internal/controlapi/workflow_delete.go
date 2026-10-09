@@ -126,8 +126,13 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
+	execution := executionIdentity(actor, "terminate", "")
 	nodeName := actor.GetStatus().GetAssignedNode()
 	if nodeName == "" {
+		if execution != nil {
+			return apierror.Unavailable("AgentENV assignment has no reachable node for termination confirmation")
+		}
+
 		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
 		return nil
 	}
@@ -135,7 +140,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	targetAteomUID := ""
 	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
 		targetAteomUID = assignment.GetWorkerPodUid()
-		if workerName := assignment.GetWorker().GetName(); workerName != "" {
+		if workerName := assignment.GetWorker().GetName(); workerName != "" && execution == nil {
 			// Ask whether the worker still HOSTS this actor, not whether its one
 			// assignment happens to be this actor: a worker hosting several is the
 			// ordinary case, and the others are none of this delete's business.
@@ -193,6 +198,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	req := &ateletpb.TerminateRequest{
+		Execution:             execution,
 		TargetAteomUid:        targetAteomUID,
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
@@ -204,6 +210,9 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 
 	if _, err := client.Terminate(ctx, req); err != nil {
 		if status.Code(err) == codes.NotFound {
+			if execution != nil {
+				return apierror.Unavailable("AgentENV termination target missing without a confirmed stop receipt")
+			}
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
 			return nil
 		}
@@ -244,6 +253,17 @@ func (w *ActorWorkflow) releaseAssignmentWithoutBacklink(ctx context.Context, ac
 			return nil
 		}
 		return fmt.Errorf("while getting worker %s to release: %w", workerName, err)
+	}
+
+	claim, err := w.store.GetWorkerAssignment(ctx, workerName, actorUID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read orphan assignment before release: %w", err)
+	}
+	if claim.GetExecutorInstanceId() != "" {
+		return apierror.Unavailable("orphan AgentENV assignment requires confirmed termination")
 	}
 
 	slog.InfoContext(ctx, "Releasing an assignment the Actor does not reference",

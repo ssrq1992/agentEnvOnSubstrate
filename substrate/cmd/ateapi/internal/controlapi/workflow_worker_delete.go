@@ -162,6 +162,9 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 // A concurrent SuspendActor or ResumeActor wins the optimistic version check;
 // this attempt fails as ABORTED so the caller retries against the newer state.
 func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment) error {
+	if worker.GetSandboxClass() == "agentenv" || assignment.GetExecutorInstanceId() != "" {
+		return apierror.Unavailable("AgentENV Worker deletion requires confirmed termination of every assignment")
+	}
 	if assignment.GetActor() == nil {
 		markSkipped(ctx, "assignment names no actor")
 		return nil

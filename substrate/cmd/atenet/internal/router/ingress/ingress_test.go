@@ -42,6 +42,7 @@ import (
 
 type mockClient struct {
 	ateapipb.ControlClient
+	getFn    func(context.Context, *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
 	resumeFn func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error)
 }
 
@@ -571,6 +572,79 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 				// before the bubble does.
 				time.Sleep(600 * time.Millisecond)
 			})
+		})
+	}
+}
+
+func TestResolvedRouteOverwritesIncarnationFence(t *testing.T) {
+	for _, uid := range []string{"resolved-uid", ""} {
+		t.Run(uid, func(t *testing.T) {
+			client := &mockClient{resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Uid: uid},
+					Status:   &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+				}}, nil
+			}}
+			h := New(client, ParkedRequestConfig{}, nil)
+			md := requestMetadata("actor-1", "team-a", &corev3.HeaderValue{Key: atenet.TargetActorUIDHeader, Value: "forged"})
+			result, err := h.HandleRequestHeaders(context.Background(), md)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation := result.Response.GetResponse().GetHeaderMutation()
+			found := false
+			for _, v := range mutation.GetSetHeaders() {
+				if v.GetHeader().GetKey() == atenet.TargetActorUIDHeader {
+					found = true
+					if string(v.GetHeader().GetRawValue()) != uid || uid == "" {
+						t.Fatal("incorrect UID mutation")
+					}
+				}
+			}
+			for _, name := range mutation.GetRemoveHeaders() {
+				if name == atenet.TargetActorUIDHeader {
+					found = true
+					if uid != "" {
+						t.Fatal("removed resolved UID")
+					}
+				}
+			}
+			if !found {
+				t.Fatal("caller UID was not overwritten or removed")
+			}
+		})
+	}
+}
+
+func (m *mockClient) GetActor(ctx context.Context, r *ateapipb.GetActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+	return m.getFn(ctx, r)
+}
+func TestBoundRouteNeverResumes(t *testing.T) {
+	for _, tc := range []struct {
+		name, uid, generation string
+		state                 ateapipb.ActorState
+		fail                  bool
+	}{
+		{"current", "uid", "9", ateapipb.ActorState_ACTOR_STATE_RUNNING, false},
+		{"old uid", "old", "9", ateapipb.ActorState_ACTOR_STATE_RUNNING, true},
+		{"old generation", "uid", "8", ateapipb.ActorState_ACTOR_STATE_RUNNING, true},
+		{"paused", "uid", "9", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockClient{getFn: func(context.Context, *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
+				return &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Uid: "uid"}, Status: &ateapipb.ActorStatus{State: tc.state, WorkerAssignment: &ateapipb.WorkerAssignment{AssignmentGeneration: 9, WorkerPodIps: []string{"10.0.0.1"}}}}, nil
+			}, resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				t.Fatal("bound route called ResumeActor")
+				return nil, nil
+			}}
+			h := New(mock, ParkedRequestConfig{}, nil)
+			result, err := h.HandleRequestHeaders(context.Background(), requestMetadata("actor", "space", &corev3.HeaderValue{Key: atenet.TargetActorUIDHeader, Value: tc.uid}, &corev3.HeaderValue{Key: atenet.TargetGenerationHeader, Value: tc.generation}, &corev3.HeaderValue{Key: atunnel.TargetPortHeader, Value: "49983"}))
+			if (err != nil) != tc.fail {
+				t.Fatalf("err=%v", err)
+			}
+			if !tc.fail && dynamicMetadataPort(result.DynamicMetadata) != "49983" {
+				t.Fatal("port not forwarded")
+			}
 		})
 	}
 }

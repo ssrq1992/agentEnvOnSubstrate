@@ -21,6 +21,8 @@
 package ateletpb
 
 import (
+	aenvexecutorpb "github.com/agent-substrate/substrate/internal/proto/aenvexecutorpb"
+	ateapipb "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -206,9 +208,18 @@ type RegisterWorkerRequest struct {
 	// plane's HardwareIdentity when forwarding.
 	//
 	// +k8s:required
-	Hardware      *HardwareIdentity `protobuf:"bytes,2,opt,name=hardware,proto3" json:"hardware,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Hardware *HardwareIdentity `protobuf:"bytes,2,opt,name=hardware,proto3" json:"hardware,omitempty"`
+	// Authenticated identity probe; does not advertise capacity.
+	// +k8s:optional
+	ProbeOnly bool `protobuf:"varint,3,opt,name=probe_only,json=probeOnly,proto3" json:"probe_only,omitempty"`
+	// +k8s:optional
+	// +k8s:minimum=0
+	ExpectedEpoch int64 `protobuf:"varint,4,opt,name=expected_epoch,json=expectedEpoch,proto3" json:"expected_epoch,omitempty"`
+	// +k8s:optional
+	// +k8s:maxLength=128
+	ExecutorInstanceId string `protobuf:"bytes,5,opt,name=executor_instance_id,json=executorInstanceId,proto3" json:"executor_instance_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RegisterWorkerRequest) Reset() {
@@ -253,6 +264,27 @@ func (x *RegisterWorkerRequest) GetHardware() *HardwareIdentity {
 		return x.Hardware
 	}
 	return nil
+}
+
+func (x *RegisterWorkerRequest) GetProbeOnly() bool {
+	if x != nil {
+		return x.ProbeOnly
+	}
+	return false
+}
+
+func (x *RegisterWorkerRequest) GetExpectedEpoch() int64 {
+	if x != nil {
+		return x.ExpectedEpoch
+	}
+	return 0
+}
+
+func (x *RegisterWorkerRequest) GetExecutorInstanceId() string {
+	if x != nil {
+		return x.ExecutorInstanceId
+	}
+	return ""
 }
 
 // HardwareIdentity identifies the hardware properties of a worker. It mirrors
@@ -484,9 +516,12 @@ func (x *Limits) GetQuantity() string {
 }
 
 type RegisterWorkerResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	WorkerPodUid       string                 `protobuf:"bytes,1,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
+	WorkerEpoch        int64                  `protobuf:"varint,2,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
+	ExecutorInstanceId string                 `protobuf:"bytes,3,opt,name=executor_instance_id,json=executorInstanceId,proto3" json:"executor_instance_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RegisterWorkerResponse) Reset() {
@@ -517,6 +552,27 @@ func (x *RegisterWorkerResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RegisterWorkerResponse.ProtoReflect.Descriptor instead.
 func (*RegisterWorkerResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RegisterWorkerResponse) GetWorkerPodUid() string {
+	if x != nil {
+		return x.WorkerPodUid
+	}
+	return ""
+}
+
+func (x *RegisterWorkerResponse) GetWorkerEpoch() int64 {
+	if x != nil {
+		return x.WorkerEpoch
+	}
+	return 0
+}
+
+func (x *RegisterWorkerResponse) GetExecutorInstanceId() string {
+	if x != nil {
+		return x.ExecutorInstanceId
+	}
+	return ""
 }
 
 type RequestActorSuspendRequest struct {
@@ -759,6 +815,8 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 
 type TerminateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Execution *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,8,opt,name=execution,proto3" json:"execution,omitempty"`
 	// If unset, the atelet will just cleanup node resources for the actor.
 	TargetAteomUid        string        `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	Atespace              string        `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
@@ -799,6 +857,13 @@ func (x *TerminateRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use TerminateRequest.ProtoReflect.Descriptor instead.
 func (*TerminateRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *TerminateRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *TerminateRequest) GetTargetAteomUid() string {
@@ -887,14 +952,20 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 }
 
 type RunRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Persisted AgentENV policy for cold boot or explicit restore override.
+	// Absent on restore preserves the captured policy.
+	// +k8s:opaqueType
+	AgentenvPolicy *aenvexecutorpb.NetworkPolicy `protobuf:"bytes,13,opt,name=agentenv_policy,json=agentenvPolicy,proto3" json:"agentenv_policy,omitempty"`
+	// +k8s:opaqueType
+	Execution             *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,12,opt,name=execution,proto3" json:"execution,omitempty"`
+	TargetAteomUid        string                             `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string                             `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                             `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                             `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                             `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                             `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	Spec                  *WorkloadSpec                      `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
 	// so a later Checkpoint can pin the same version into the snapshot manifest.
@@ -938,6 +1009,20 @@ func (x *RunRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RunRequest.ProtoReflect.Descriptor instead.
 func (*RunRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RunRequest) GetAgentenvPolicy() *aenvexecutorpb.NetworkPolicy {
+	if x != nil {
+		return x.AgentenvPolicy
+	}
+	return nil
+}
+
+func (x *RunRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *RunRequest) GetTargetAteomUid() string {
@@ -1907,9 +1992,13 @@ type Container struct {
 	SecurityContext *SecurityContext       `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources are the cgroup limits for this container, resolved by
 	// ate-api-server from the ActorTemplate. Unset means no limits.
-	Resources     *ResourceLimits `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Resources               *ResourceLimits `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	AgentenvExtensionParams string          `protobuf:"bytes,10,opt,name=agentenv_extension_params,json=agentenvExtensionParams,proto3" json:"agentenv_extension_params,omitempty"`
+	// Public control-plane validators check the typed launch description.
+	// +k8s:opaqueType
+	AgentenvLaunch *ateapipb.AgentENVLaunchConfig `protobuf:"bytes,11,opt,name=agentenv_launch,json=agentenvLaunch,proto3" json:"agentenv_launch,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Container) Reset() {
@@ -2001,6 +2090,20 @@ func (x *Container) GetSecurityContext() *SecurityContext {
 func (x *Container) GetResources() *ResourceLimits {
 	if x != nil {
 		return x.Resources
+	}
+	return nil
+}
+
+func (x *Container) GetAgentenvExtensionParams() string {
+	if x != nil {
+		return x.AgentenvExtensionParams
+	}
+	return ""
+}
+
+func (x *Container) GetAgentenvLaunch() *ateapipb.AgentENVLaunchConfig {
+	if x != nil {
+		return x.AgentenvLaunch
 	}
 	return nil
 }
@@ -2503,13 +2606,15 @@ func (x *ExternalRestoreConfiguration) GetSnapshotUri() string {
 }
 
 type CheckpointRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Execution             *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,12,opt,name=execution,proto3" json:"execution,omitempty"`
+	TargetAteomUid        string                             `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string                             `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                             `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                             `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                             `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                             `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on checkpoint: atelet uses the version the
 	// actor is currently running (recorded with the actor's on-node state at
 	// Run/Restore) and records it into the snapshot manifest.
@@ -2556,6 +2661,13 @@ func (x *CheckpointRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use CheckpointRequest.ProtoReflect.Descriptor instead.
 func (*CheckpointRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *CheckpointRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *CheckpointRequest) GetTargetAteomUid() string {
@@ -2844,15 +2956,21 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 }
 
 type RestoreRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	Type                  CheckpointType         `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Persisted AgentENV policy for cold boot or explicit restore override.
+	// Absent on restore preserves the captured policy.
+	// +k8s:opaqueType
+	AgentenvPolicy *aenvexecutorpb.NetworkPolicy `protobuf:"bytes,18,opt,name=agentenv_policy,json=agentenvPolicy,proto3" json:"agentenv_policy,omitempty"`
+	// +k8s:opaqueType
+	Execution             *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,17,opt,name=execution,proto3" json:"execution,omitempty"`
+	TargetAteomUid        string                             `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string                             `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string                             `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string                             `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string                             `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string                             `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	Spec                  *WorkloadSpec                      `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	Type                  CheckpointType                     `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
 	//
 	// Types that are valid to be assigned to Config:
@@ -2905,6 +3023,20 @@ func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RestoreRequest.ProtoReflect.Descriptor instead.
 func (*RestoreRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *RestoreRequest) GetAgentenvPolicy() *aenvexecutorpb.NetworkPolicy {
+	if x != nil {
+		return x.AgentenvPolicy
+	}
+	return nil
+}
+
+func (x *RestoreRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
 }
 
 func (x *RestoreRequest) GetTargetAteomUid() string {
@@ -3075,14 +3207,139 @@ func (*RestoreResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{44}
 }
 
+type ReadAgentENVConnectionRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid       string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	TargetAteomUid string                 `protobuf:"bytes,2,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	// +k8s:opaqueType
+	Execution     *aenvexecutorpb.LifecycleOperation `protobuf:"bytes,3,opt,name=execution,proto3" json:"execution,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadAgentENVConnectionRequest) Reset() {
+	*x = ReadAgentENVConnectionRequest{}
+	mi := &file_atelet_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadAgentENVConnectionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadAgentENVConnectionRequest) ProtoMessage() {}
+
+func (x *ReadAgentENVConnectionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_atelet_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadAgentENVConnectionRequest.ProtoReflect.Descriptor instead.
+func (*ReadAgentENVConnectionRequest) Descriptor() ([]byte, []int) {
+	return file_atelet_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *ReadAgentENVConnectionRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+func (x *ReadAgentENVConnectionRequest) GetTargetAteomUid() string {
+	if x != nil {
+		return x.TargetAteomUid
+	}
+	return ""
+}
+
+func (x *ReadAgentENVConnectionRequest) GetExecution() *aenvexecutorpb.LifecycleOperation {
+	if x != nil {
+		return x.Execution
+	}
+	return nil
+}
+
+type ReadAgentENVConnectionResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	EnvdAccessToken string                 `protobuf:"bytes,1,opt,name=envd_access_token,json=envdAccessToken,proto3" json:"envd_access_token,omitempty"`
+	EnvdVersion     string                 `protobuf:"bytes,2,opt,name=envd_version,json=envdVersion,proto3" json:"envd_version,omitempty"`
+	RootfsBytes     uint64                 `protobuf:"varint,3,opt,name=rootfs_bytes,json=rootfsBytes,proto3" json:"rootfs_bytes,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ReadAgentENVConnectionResponse) Reset() {
+	*x = ReadAgentENVConnectionResponse{}
+	mi := &file_atelet_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadAgentENVConnectionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadAgentENVConnectionResponse) ProtoMessage() {}
+
+func (x *ReadAgentENVConnectionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_atelet_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadAgentENVConnectionResponse.ProtoReflect.Descriptor instead.
+func (*ReadAgentENVConnectionResponse) Descriptor() ([]byte, []int) {
+	return file_atelet_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *ReadAgentENVConnectionResponse) GetEnvdAccessToken() string {
+	if x != nil {
+		return x.EnvdAccessToken
+	}
+	return ""
+}
+
+func (x *ReadAgentENVConnectionResponse) GetEnvdVersion() string {
+	if x != nil {
+		return x.EnvdVersion
+	}
+	return ""
+}
+
+func (x *ReadAgentENVConnectionResponse) GetRootfsBytes() uint64 {
+	if x != nil {
+		return x.RootfsBytes
+	}
+	return 0
+}
+
 var File_atelet_proto protoreflect.FileDescriptor
 
 const file_atelet_proto_rawDesc = "" +
 	"\n" +
-	"\fatelet.proto\x12\x06atelet\"\x82\x01\n" +
+	"\fatelet.proto\x12\x06atelet\x1a\x0eexecutor.proto\x1a\fateapi.proto\"\xfa\x01\n" +
 	"\x15RegisterWorkerRequest\x123\n" +
 	"\bcapacity\x18\x01 \x01(\v2\x17.atelet.WorkerResourcesR\bcapacity\x124\n" +
-	"\bhardware\x18\x02 \x01(\v2\x18.atelet.HardwareIdentityR\bhardware\"\x9b\x01\n" +
+	"\bhardware\x18\x02 \x01(\v2\x18.atelet.HardwareIdentityR\bhardware\x12\x1d\n" +
+	"\n" +
+	"probe_only\x18\x03 \x01(\bR\tprobeOnly\x12%\n" +
+	"\x0eexpected_epoch\x18\x04 \x01(\x03R\rexpectedEpoch\x120\n" +
+	"\x14executor_instance_id\x18\x05 \x01(\tR\x12executorInstanceId\"\x9b\x01\n" +
 	"\x10HardwareIdentity\x12H\n" +
 	"\n" +
 	"attributes\x18\x01 \x03(\v2(.atelet.HardwareIdentity.AttributesEntryR\n" +
@@ -3097,8 +3354,11 @@ const file_atelet_proto_rawDesc = "" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.atelet.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\tR\bquantity\"\x18\n" +
-	"\x16RegisterWorkerResponse\"\x7f\n" +
+	"\bquantity\x18\x02 \x01(\tR\bquantity\"\x93\x01\n" +
+	"\x16RegisterWorkerResponse\x12$\n" +
+	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12!\n" +
+	"\fworker_epoch\x18\x02 \x01(\x03R\vworkerEpoch\x120\n" +
+	"\x14executor_instance_id\x18\x03 \x01(\tR\x12executorInstanceId\"\x7f\n" +
 	"\x1aRequestActorSuspendRequest\x12%\n" +
 	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
 	"\n" +
@@ -3112,8 +3372,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
-	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa6\x02\n" +
-	"\x10TerminateRequest\x12(\n" +
+	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xee\x02\n" +
+	"\x10TerminateRequest\x12F\n" +
+	"\texecution\x18\b \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3122,9 +3383,11 @@ const file_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
-	"\x11TerminateResponse\"\xf4\x03\n" +
+	"\x11TerminateResponse\"\x8a\x05\n" +
 	"\n" +
-	"RunRequest\x12(\n" +
+	"RunRequest\x12L\n" +
+	"\x0fagentenv_policy\x18\r \x01(\v2#.agentenv.executor.v1.NetworkPolicyR\x0eagentenvPolicy\x12F\n" +
+	"\texecution\x18\f \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3205,7 +3468,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xf3\x02\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xfb\x03\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
@@ -3215,7 +3478,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\fwakeup_probe\x18\x05 \x01(\v2\x13.atelet.WakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\x06 \x03(\v2\x13.atelet.VolumeMountR\fvolumeMounts\x12B\n" +
 	"\x10security_context\x18\b \x01(\v2\x17.atelet.SecurityContextR\x0fsecurityContext\x124\n" +
-	"\tresources\x18\t \x01(\v2\x16.atelet.ResourceLimitsR\tresources\"K\n" +
+	"\tresources\x18\t \x01(\v2\x16.atelet.ResourceLimitsR\tresources\x12?\n" +
+	"\x19agentenv_extension_params\x18\n" +
+	" \x01(\tB\x03\x80\x01\x01R\x17agentenvExtensionParams\x12E\n" +
+	"\x0fagentenv_launch\x18\v \x01(\v2\x1c.ateapi.AgentENVLaunchConfigR\x0eagentenvLaunch\"K\n" +
 	"\x0fSecurityContext\x128\n" +
 	"\fcapabilities\x18\x01 \x01(\v2\x14.atelet.CapabilitiesR\fcapabilities\"4\n" +
 	"\fCapabilities\x12\x10\n" +
@@ -3240,8 +3506,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1fExternalCheckpointConfiguration\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"A\n" +
 	"\x1cExternalRestoreConfiguration\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xa9\x04\n" +
-	"\x11CheckpointRequest\x12(\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xf1\x04\n" +
+	"\x11CheckpointRequest\x12F\n" +
+	"\texecution\x18\f \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3267,8 +3534,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xf7\x05\n" +
-	"\x0eRestoreRequest\x12(\n" +
+	"\x1eUploadPausedCheckpointResponse\"\x8d\a\n" +
+	"\x0eRestoreRequest\x12L\n" +
+	"\x0fagentenv_policy\x18\x12 \x01(\v2#.agentenv.executor.v1.NetworkPolicyR\x0eagentenvPolicy\x12F\n" +
+	"\texecution\x18\x11 \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3288,7 +3557,15 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
-	"\x0fRestoreResponse*\x9a\x01\n" +
+	"\x0fRestoreResponse\"\xae\x01\n" +
+	"\x1dReadAgentENVConnectionRequest\x12\x1b\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\x12(\n" +
+	"\x10target_ateom_uid\x18\x02 \x01(\tR\x0etargetAteomUid\x12F\n" +
+	"\texecution\x18\x03 \x01(\v2(.agentenv.executor.v1.LifecycleOperationR\texecution\"\x97\x01\n" +
+	"\x1eReadAgentENVConnectionResponse\x12/\n" +
+	"\x11envd_access_token\x18\x01 \x01(\tB\x03\x80\x01\x01R\x0fenvdAccessToken\x12!\n" +
+	"\fenvd_version\x18\x02 \x01(\tR\venvdVersion\x12!\n" +
+	"\frootfs_bytes\x18\x03 \x01(\x04R\vrootfsBytes*\x9a\x01\n" +
 	"\x12ActorMetadataField\x12$\n" +
 	" ACTOR_METADATA_FIELD_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19ACTOR_METADATA_FIELD_NAME\x10\x01\x12!\n" +
@@ -3305,11 +3582,17 @@ const file_atelet_proto_rawDesc = "" +
 	"\fAteomSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
-	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x002\xf3\x02\n" +
-	"\vAteomHerder\x120\n" +
+	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x002\xee\a\n" +
+	"\vAteomHerder\x12d\n" +
+	"\x0eReadGuestStats\x12+.agentenv.executor.v1.ReadGuestStatsRequest\x1a#.agentenv.executor.v1.StatsResponse\"\x00\x12y\n" +
+	"\x12ApplyNetworkPolicy\x12/.agentenv.executor.v1.ApplyNetworkPolicyRequest\x1a0.agentenv.executor.v1.ApplyNetworkPolicyResponse\"\x00\x12h\n" +
+	"\x0fReadRuntimeInfo\x12,.agentenv.executor.v1.ReadRuntimeInfoRequest\x1a%.agentenv.executor.v1.InspectResponse\"\x00\x12\x7f\n" +
+	"\x14ApplyExtensionParams\x121.agentenv.executor.v1.ApplyExtensionParamsRequest\x1a2.agentenv.executor.v1.ApplyExtensionParamsResponse\"\x00\x12i\n" +
+	"\x16ReadAgentENVConnection\x12%.atelet.ReadAgentENVConnectionRequest\x1a&.atelet.ReadAgentENVConnectionResponse\"\x00\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +
-	"Checkpoint\x12\x19.atelet.CheckpointRequest\x1a\x1a.atelet.CheckpointResponse\"\x00\x12<\n" +
+	"Checkpoint\x12\x19.atelet.CheckpointRequest\x1a\x1a.atelet.CheckpointResponse\"\x00\x12B\n" +
+	"\aCapture\x12\x19.atelet.CheckpointRequest\x1a\x1a.atelet.CheckpointResponse\"\x00\x12<\n" +
 	"\aRestore\x12\x16.atelet.RestoreRequest\x1a\x17.atelet.RestoreResponse\"\x00\x12i\n" +
 	"\x16UploadPausedCheckpoint\x12%.atelet.UploadPausedCheckpointRequest\x1a&.atelet.UploadPausedCheckpointResponse\"\x00\x12B\n" +
 	"\tTerminate\x12\x18.atelet.TerminateRequest\x1a\x19.atelet.TerminateResponse\"\x00B>Z<github.com/agent-substrate/substrate/internal/proto/ateletpbb\x06proto3"
@@ -3327,130 +3610,163 @@ func file_atelet_proto_rawDescGZIP() []byte {
 }
 
 var file_atelet_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
+var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
 var file_atelet_proto_goTypes = []any{
-	(ActorMetadataField)(0),                 // 0: atelet.ActorMetadataField
-	(CheckpointType)(0),                     // 1: atelet.CheckpointType
-	(SnapshotScope)(0),                      // 2: atelet.SnapshotScope
-	(*RegisterWorkerRequest)(nil),           // 3: atelet.RegisterWorkerRequest
-	(*HardwareIdentity)(nil),                // 4: atelet.HardwareIdentity
-	(*WorkerResources)(nil),                 // 5: atelet.WorkerResources
-	(*Resources)(nil),                       // 6: atelet.Resources
-	(*Limits)(nil),                          // 7: atelet.Limits
-	(*RegisterWorkerResponse)(nil),          // 8: atelet.RegisterWorkerResponse
-	(*RequestActorSuspendRequest)(nil),      // 9: atelet.RequestActorSuspendRequest
-	(*RequestActorSuspendResponse)(nil),     // 10: atelet.RequestActorSuspendResponse
-	(*MintActorCertificateRequest)(nil),     // 11: atelet.MintActorCertificateRequest
-	(*MintActorCertificateResponse)(nil),    // 12: atelet.MintActorCertificateResponse
-	(*TerminateRequest)(nil),                // 13: atelet.TerminateRequest
-	(*TerminateResponse)(nil),               // 14: atelet.TerminateResponse
-	(*RunRequest)(nil),                      // 15: atelet.RunRequest
-	(*EgressGateway)(nil),                   // 16: atelet.EgressGateway
-	(*AssetFile)(nil),                       // 17: atelet.AssetFile
-	(*ArchAssets)(nil),                      // 18: atelet.ArchAssets
-	(*SandboxAssets)(nil),                   // 19: atelet.SandboxAssets
-	(*WorkloadSpec)(nil),                    // 20: atelet.WorkloadSpec
-	(*DurableDirVolume)(nil),                // 21: atelet.DurableDirVolume
-	(*ExternalVolumeSource)(nil),            // 22: atelet.ExternalVolumeSource
-	(*ImageVolumeSource)(nil),               // 23: atelet.ImageVolumeSource
-	(*ActorMetadataItem)(nil),               // 24: atelet.ActorMetadataItem
-	(*ActorMetadataDataSource)(nil),         // 25: atelet.ActorMetadataDataSource
-	(*TrustBundleDataSource)(nil),           // 26: atelet.TrustBundleDataSource
-	(*SystemInfoDataSource)(nil),            // 27: atelet.SystemInfoDataSource
-	(*SystemInfoVolume)(nil),                // 28: atelet.SystemInfoVolume
-	(*Volume)(nil),                          // 29: atelet.Volume
-	(*VolumeMount)(nil),                     // 30: atelet.VolumeMount
-	(*Container)(nil),                       // 31: atelet.Container
-	(*SecurityContext)(nil),                 // 32: atelet.SecurityContext
-	(*Capabilities)(nil),                    // 33: atelet.Capabilities
-	(*ResourceLimits)(nil),                  // 34: atelet.ResourceLimits
-	(*EnvEntry)(nil),                        // 35: atelet.EnvEntry
-	(*WakeupProbe)(nil),                     // 36: atelet.WakeupProbe
-	(*HTTPGetAction)(nil),                   // 37: atelet.HTTPGetAction
-	(*RunResponse)(nil),                     // 38: atelet.RunResponse
-	(*LocalCheckpointConfiguration)(nil),    // 39: atelet.LocalCheckpointConfiguration
-	(*ExternalCheckpointConfiguration)(nil), // 40: atelet.ExternalCheckpointConfiguration
-	(*ExternalRestoreConfiguration)(nil),    // 41: atelet.ExternalRestoreConfiguration
-	(*CheckpointRequest)(nil),               // 42: atelet.CheckpointRequest
-	(*CheckpointResponse)(nil),              // 43: atelet.CheckpointResponse
-	(*UploadPausedCheckpointRequest)(nil),   // 44: atelet.UploadPausedCheckpointRequest
-	(*UploadPausedCheckpointResponse)(nil),  // 45: atelet.UploadPausedCheckpointResponse
-	(*RestoreRequest)(nil),                  // 46: atelet.RestoreRequest
-	(*RestoreResponse)(nil),                 // 47: atelet.RestoreResponse
-	nil,                                     // 48: atelet.HardwareIdentity.AttributesEntry
-	nil,                                     // 49: atelet.ArchAssets.FilesEntry
-	nil,                                     // 50: atelet.SandboxAssets.AssetsEntry
-	nil,                                     // 51: atelet.ExternalVolumeSource.VolumeContextEntry
-	nil,                                     // 52: atelet.ExternalVolumeSource.PublishContextEntry
+	(ActorMetadataField)(0),                             // 0: atelet.ActorMetadataField
+	(CheckpointType)(0),                                 // 1: atelet.CheckpointType
+	(SnapshotScope)(0),                                  // 2: atelet.SnapshotScope
+	(*RegisterWorkerRequest)(nil),                       // 3: atelet.RegisterWorkerRequest
+	(*HardwareIdentity)(nil),                            // 4: atelet.HardwareIdentity
+	(*WorkerResources)(nil),                             // 5: atelet.WorkerResources
+	(*Resources)(nil),                                   // 6: atelet.Resources
+	(*Limits)(nil),                                      // 7: atelet.Limits
+	(*RegisterWorkerResponse)(nil),                      // 8: atelet.RegisterWorkerResponse
+	(*RequestActorSuspendRequest)(nil),                  // 9: atelet.RequestActorSuspendRequest
+	(*RequestActorSuspendResponse)(nil),                 // 10: atelet.RequestActorSuspendResponse
+	(*MintActorCertificateRequest)(nil),                 // 11: atelet.MintActorCertificateRequest
+	(*MintActorCertificateResponse)(nil),                // 12: atelet.MintActorCertificateResponse
+	(*TerminateRequest)(nil),                            // 13: atelet.TerminateRequest
+	(*TerminateResponse)(nil),                           // 14: atelet.TerminateResponse
+	(*RunRequest)(nil),                                  // 15: atelet.RunRequest
+	(*EgressGateway)(nil),                               // 16: atelet.EgressGateway
+	(*AssetFile)(nil),                                   // 17: atelet.AssetFile
+	(*ArchAssets)(nil),                                  // 18: atelet.ArchAssets
+	(*SandboxAssets)(nil),                               // 19: atelet.SandboxAssets
+	(*WorkloadSpec)(nil),                                // 20: atelet.WorkloadSpec
+	(*DurableDirVolume)(nil),                            // 21: atelet.DurableDirVolume
+	(*ExternalVolumeSource)(nil),                        // 22: atelet.ExternalVolumeSource
+	(*ImageVolumeSource)(nil),                           // 23: atelet.ImageVolumeSource
+	(*ActorMetadataItem)(nil),                           // 24: atelet.ActorMetadataItem
+	(*ActorMetadataDataSource)(nil),                     // 25: atelet.ActorMetadataDataSource
+	(*TrustBundleDataSource)(nil),                       // 26: atelet.TrustBundleDataSource
+	(*SystemInfoDataSource)(nil),                        // 27: atelet.SystemInfoDataSource
+	(*SystemInfoVolume)(nil),                            // 28: atelet.SystemInfoVolume
+	(*Volume)(nil),                                      // 29: atelet.Volume
+	(*VolumeMount)(nil),                                 // 30: atelet.VolumeMount
+	(*Container)(nil),                                   // 31: atelet.Container
+	(*SecurityContext)(nil),                             // 32: atelet.SecurityContext
+	(*Capabilities)(nil),                                // 33: atelet.Capabilities
+	(*ResourceLimits)(nil),                              // 34: atelet.ResourceLimits
+	(*EnvEntry)(nil),                                    // 35: atelet.EnvEntry
+	(*WakeupProbe)(nil),                                 // 36: atelet.WakeupProbe
+	(*HTTPGetAction)(nil),                               // 37: atelet.HTTPGetAction
+	(*RunResponse)(nil),                                 // 38: atelet.RunResponse
+	(*LocalCheckpointConfiguration)(nil),                // 39: atelet.LocalCheckpointConfiguration
+	(*ExternalCheckpointConfiguration)(nil),             // 40: atelet.ExternalCheckpointConfiguration
+	(*ExternalRestoreConfiguration)(nil),                // 41: atelet.ExternalRestoreConfiguration
+	(*CheckpointRequest)(nil),                           // 42: atelet.CheckpointRequest
+	(*CheckpointResponse)(nil),                          // 43: atelet.CheckpointResponse
+	(*UploadPausedCheckpointRequest)(nil),               // 44: atelet.UploadPausedCheckpointRequest
+	(*UploadPausedCheckpointResponse)(nil),              // 45: atelet.UploadPausedCheckpointResponse
+	(*RestoreRequest)(nil),                              // 46: atelet.RestoreRequest
+	(*RestoreResponse)(nil),                             // 47: atelet.RestoreResponse
+	(*ReadAgentENVConnectionRequest)(nil),               // 48: atelet.ReadAgentENVConnectionRequest
+	(*ReadAgentENVConnectionResponse)(nil),              // 49: atelet.ReadAgentENVConnectionResponse
+	nil,                                                 // 50: atelet.HardwareIdentity.AttributesEntry
+	nil,                                                 // 51: atelet.ArchAssets.FilesEntry
+	nil,                                                 // 52: atelet.SandboxAssets.AssetsEntry
+	nil,                                                 // 53: atelet.ExternalVolumeSource.VolumeContextEntry
+	nil,                                                 // 54: atelet.ExternalVolumeSource.PublishContextEntry
+	(*aenvexecutorpb.LifecycleOperation)(nil),           // 55: agentenv.executor.v1.LifecycleOperation
+	(*aenvexecutorpb.NetworkPolicy)(nil),                // 56: agentenv.executor.v1.NetworkPolicy
+	(*ateapipb.AgentENVLaunchConfig)(nil),               // 57: ateapi.AgentENVLaunchConfig
+	(*aenvexecutorpb.ReadGuestStatsRequest)(nil),        // 58: agentenv.executor.v1.ReadGuestStatsRequest
+	(*aenvexecutorpb.ApplyNetworkPolicyRequest)(nil),    // 59: agentenv.executor.v1.ApplyNetworkPolicyRequest
+	(*aenvexecutorpb.ReadRuntimeInfoRequest)(nil),       // 60: agentenv.executor.v1.ReadRuntimeInfoRequest
+	(*aenvexecutorpb.ApplyExtensionParamsRequest)(nil),  // 61: agentenv.executor.v1.ApplyExtensionParamsRequest
+	(*aenvexecutorpb.StatsResponse)(nil),                // 62: agentenv.executor.v1.StatsResponse
+	(*aenvexecutorpb.ApplyNetworkPolicyResponse)(nil),   // 63: agentenv.executor.v1.ApplyNetworkPolicyResponse
+	(*aenvexecutorpb.InspectResponse)(nil),              // 64: agentenv.executor.v1.InspectResponse
+	(*aenvexecutorpb.ApplyExtensionParamsResponse)(nil), // 65: agentenv.executor.v1.ApplyExtensionParamsResponse
 }
 var file_atelet_proto_depIdxs = []int32{
 	5,  // 0: atelet.RegisterWorkerRequest.capacity:type_name -> atelet.WorkerResources
 	4,  // 1: atelet.RegisterWorkerRequest.hardware:type_name -> atelet.HardwareIdentity
-	48, // 2: atelet.HardwareIdentity.attributes:type_name -> atelet.HardwareIdentity.AttributesEntry
+	50, // 2: atelet.HardwareIdentity.attributes:type_name -> atelet.HardwareIdentity.AttributesEntry
 	6,  // 3: atelet.WorkerResources.resources:type_name -> atelet.Resources
 	7,  // 4: atelet.Resources.limits:type_name -> atelet.Limits
-	20, // 5: atelet.TerminateRequest.spec:type_name -> atelet.WorkloadSpec
-	20, // 6: atelet.RunRequest.spec:type_name -> atelet.WorkloadSpec
-	19, // 7: atelet.RunRequest.sandbox_assets:type_name -> atelet.SandboxAssets
-	16, // 8: atelet.RunRequest.egress_gateway:type_name -> atelet.EgressGateway
-	49, // 9: atelet.ArchAssets.files:type_name -> atelet.ArchAssets.FilesEntry
-	50, // 10: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
-	31, // 11: atelet.WorkloadSpec.containers:type_name -> atelet.Container
-	29, // 12: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
-	51, // 13: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
-	52, // 14: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
-	0,  // 15: atelet.ActorMetadataItem.field:type_name -> atelet.ActorMetadataField
-	24, // 16: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
-	25, // 17: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
-	26, // 18: atelet.SystemInfoDataSource.trust_bundle:type_name -> atelet.TrustBundleDataSource
-	27, // 19: atelet.SystemInfoVolume.data_sources:type_name -> atelet.SystemInfoDataSource
-	21, // 20: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolume
-	22, // 21: atelet.Volume.external:type_name -> atelet.ExternalVolumeSource
-	28, // 22: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolume
-	23, // 23: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
-	35, // 24: atelet.Container.env:type_name -> atelet.EnvEntry
-	36, // 25: atelet.Container.wakeup_probe:type_name -> atelet.WakeupProbe
-	30, // 26: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
-	32, // 27: atelet.Container.security_context:type_name -> atelet.SecurityContext
-	34, // 28: atelet.Container.resources:type_name -> atelet.ResourceLimits
-	33, // 29: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
-	37, // 30: atelet.WakeupProbe.http_get:type_name -> atelet.HTTPGetAction
-	20, // 31: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
-	1,  // 32: atelet.CheckpointRequest.type:type_name -> atelet.CheckpointType
-	39, // 33: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
-	40, // 34: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
-	2,  // 35: atelet.CheckpointRequest.scope:type_name -> atelet.SnapshotScope
-	2,  // 36: atelet.UploadPausedCheckpointRequest.desired_scope:type_name -> atelet.SnapshotScope
-	20, // 37: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
-	1,  // 38: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
-	39, // 39: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
-	41, // 40: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalRestoreConfiguration
-	2,  // 41: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
-	16, // 42: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	19, // 43: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
-	17, // 44: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	18, // 45: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	11, // 46: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 47: atelet.AteomSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
-	9,  // 48: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	15, // 49: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	42, // 50: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	46, // 51: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	44, // 52: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
-	13, // 53: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	12, // 54: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	8,  // 55: atelet.AteomSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
-	10, // 56: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	38, // 57: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	43, // 58: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	47, // 59: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	45, // 60: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
-	14, // 61: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
-	54, // [54:62] is the sub-list for method output_type
-	46, // [46:54] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	55, // 5: atelet.TerminateRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	20, // 6: atelet.TerminateRequest.spec:type_name -> atelet.WorkloadSpec
+	56, // 7: atelet.RunRequest.agentenv_policy:type_name -> agentenv.executor.v1.NetworkPolicy
+	55, // 8: atelet.RunRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	20, // 9: atelet.RunRequest.spec:type_name -> atelet.WorkloadSpec
+	19, // 10: atelet.RunRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	16, // 11: atelet.RunRequest.egress_gateway:type_name -> atelet.EgressGateway
+	51, // 12: atelet.ArchAssets.files:type_name -> atelet.ArchAssets.FilesEntry
+	52, // 13: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
+	31, // 14: atelet.WorkloadSpec.containers:type_name -> atelet.Container
+	29, // 15: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
+	53, // 16: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
+	54, // 17: atelet.ExternalVolumeSource.publish_context:type_name -> atelet.ExternalVolumeSource.PublishContextEntry
+	0,  // 18: atelet.ActorMetadataItem.field:type_name -> atelet.ActorMetadataField
+	24, // 19: atelet.ActorMetadataDataSource.items:type_name -> atelet.ActorMetadataItem
+	25, // 20: atelet.SystemInfoDataSource.actor_metadata:type_name -> atelet.ActorMetadataDataSource
+	26, // 21: atelet.SystemInfoDataSource.trust_bundle:type_name -> atelet.TrustBundleDataSource
+	27, // 22: atelet.SystemInfoVolume.data_sources:type_name -> atelet.SystemInfoDataSource
+	21, // 23: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolume
+	22, // 24: atelet.Volume.external:type_name -> atelet.ExternalVolumeSource
+	28, // 25: atelet.Volume.system_info:type_name -> atelet.SystemInfoVolume
+	23, // 26: atelet.Volume.image:type_name -> atelet.ImageVolumeSource
+	35, // 27: atelet.Container.env:type_name -> atelet.EnvEntry
+	36, // 28: atelet.Container.wakeup_probe:type_name -> atelet.WakeupProbe
+	30, // 29: atelet.Container.volume_mounts:type_name -> atelet.VolumeMount
+	32, // 30: atelet.Container.security_context:type_name -> atelet.SecurityContext
+	34, // 31: atelet.Container.resources:type_name -> atelet.ResourceLimits
+	57, // 32: atelet.Container.agentenv_launch:type_name -> ateapi.AgentENVLaunchConfig
+	33, // 33: atelet.SecurityContext.capabilities:type_name -> atelet.Capabilities
+	37, // 34: atelet.WakeupProbe.http_get:type_name -> atelet.HTTPGetAction
+	55, // 35: atelet.CheckpointRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	20, // 36: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
+	1,  // 37: atelet.CheckpointRequest.type:type_name -> atelet.CheckpointType
+	39, // 38: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
+	40, // 39: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
+	2,  // 40: atelet.CheckpointRequest.scope:type_name -> atelet.SnapshotScope
+	2,  // 41: atelet.UploadPausedCheckpointRequest.desired_scope:type_name -> atelet.SnapshotScope
+	56, // 42: atelet.RestoreRequest.agentenv_policy:type_name -> agentenv.executor.v1.NetworkPolicy
+	55, // 43: atelet.RestoreRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	20, // 44: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
+	1,  // 45: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
+	39, // 46: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
+	41, // 47: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalRestoreConfiguration
+	2,  // 48: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
+	16, // 49: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
+	19, // 50: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	55, // 51: atelet.ReadAgentENVConnectionRequest.execution:type_name -> agentenv.executor.v1.LifecycleOperation
+	17, // 52: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	18, // 53: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	11, // 54: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 55: atelet.AteomSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
+	9,  // 56: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
+	58, // 57: atelet.AteomHerder.ReadGuestStats:input_type -> agentenv.executor.v1.ReadGuestStatsRequest
+	59, // 58: atelet.AteomHerder.ApplyNetworkPolicy:input_type -> agentenv.executor.v1.ApplyNetworkPolicyRequest
+	60, // 59: atelet.AteomHerder.ReadRuntimeInfo:input_type -> agentenv.executor.v1.ReadRuntimeInfoRequest
+	61, // 60: atelet.AteomHerder.ApplyExtensionParams:input_type -> agentenv.executor.v1.ApplyExtensionParamsRequest
+	48, // 61: atelet.AteomHerder.ReadAgentENVConnection:input_type -> atelet.ReadAgentENVConnectionRequest
+	15, // 62: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
+	42, // 63: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
+	42, // 64: atelet.AteomHerder.Capture:input_type -> atelet.CheckpointRequest
+	46, // 65: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
+	44, // 66: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
+	13, // 67: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
+	12, // 68: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	8,  // 69: atelet.AteomSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
+	10, // 70: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	62, // 71: atelet.AteomHerder.ReadGuestStats:output_type -> agentenv.executor.v1.StatsResponse
+	63, // 72: atelet.AteomHerder.ApplyNetworkPolicy:output_type -> agentenv.executor.v1.ApplyNetworkPolicyResponse
+	64, // 73: atelet.AteomHerder.ReadRuntimeInfo:output_type -> agentenv.executor.v1.InspectResponse
+	65, // 74: atelet.AteomHerder.ApplyExtensionParams:output_type -> agentenv.executor.v1.ApplyExtensionParamsResponse
+	49, // 75: atelet.AteomHerder.ReadAgentENVConnection:output_type -> atelet.ReadAgentENVConnectionResponse
+	38, // 76: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
+	43, // 77: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
+	43, // 78: atelet.AteomHerder.Capture:output_type -> atelet.CheckpointResponse
+	47, // 79: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
+	45, // 80: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
+	14, // 81: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
+	68, // [68:82] is the sub-list for method output_type
+	54, // [54:68] is the sub-list for method input_type
+	54, // [54:54] is the sub-list for extension type_name
+	54, // [54:54] is the sub-list for extension extendee
+	0,  // [0:54] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }
@@ -3483,7 +3799,7 @@ func file_atelet_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_atelet_proto_rawDesc), len(file_atelet_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   50,
+			NumMessages:   52,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -601,5 +602,26 @@ func TestLoadRejectsIncompleteKubernetesSchedulerDiscoveryConfig(t *testing.T) {
 
 	if _, err := Load(path, "scheduler"); err == nil {
 		t.Fatal("expected load to fail for incomplete kubernetes discovery config")
+	}
+}
+
+func TestSubstrateGatewayConfiguration(t *testing.T) {
+	cfg := defaultConfig("gateway")
+	if err := json.Unmarshal([]byte(`{"mode":"substrate","bridge_url":"https://bridge.internal","bridge_credential_bundle":"/identity.pem","bridge_trust_bundle":"/roots.pem","scheduler_addr":""}`), &cfg.Gateway); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Gateway.Mode != "substrate" || cfg.Gateway.BridgeURL != "https://bridge.internal" {
+		t.Fatal("Substrate fields discarded during JSON decoding")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Gateway.BridgeTrustBundle = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("missing trust roots accepted")
+	}
+	cfg.Gateway.Mode = "unknown"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("unknown backend mode accepted")
 	}
 }

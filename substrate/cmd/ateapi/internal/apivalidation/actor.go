@@ -165,3 +165,22 @@ func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operatio
 	}
 	return nil
 }
+
+func ValidateConnectActorRequest(ctx context.Context, req *ateapipb.ConnectActorRequest) field.ErrorList {
+	return Validate_ConnectActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+func ValidateGetActorGuestMetricsRequest(ctx context.Context, req *ateapipb.GetActorGuestMetricsRequest) field.ErrorList {
+	return Validate_GetActorGuestMetricsRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+func ValidateCaptureActorSnapshotRequest(ctx context.Context, req *ateapipb.CaptureActorSnapshotRequest) field.ErrorList {
+	return Validate_CaptureActorSnapshotRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+func ValidateGetActorExtensionParamsRequest(ctx context.Context, req *ateapipb.GetActorExtensionParamsRequest) field.ErrorList {
+	return Validate_GetActorExtensionParamsRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+func ValidateUpdateActorExtensionParamsRequest(ctx context.Context, req *ateapipb.UpdateActorExtensionParamsRequest) field.ErrorList {
+	return Validate_UpdateActorExtensionParamsRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}

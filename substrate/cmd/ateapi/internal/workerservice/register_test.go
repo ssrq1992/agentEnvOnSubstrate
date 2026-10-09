@@ -224,3 +224,31 @@ func TestRegisterWorker_RejectsNonsense(t *testing.T) {
 		t.Errorf("capacity changed despite every report being refused (-want +got):\n%s", diff)
 	}
 }
+
+func TestExecutorRegistrationFence(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		class                       string
+		epoch, registered, expected int64
+		previous, next              string
+		wantError                   bool
+	}{
+		{"first registration", "agentenv", 2, 0, 2, "", "first", false},
+		{"retry", "agentenv", 2, 2, 2, "first", "first", false},
+		{"old epoch", "agentenv", 3, 2, 2, "first", "first", true},
+		{"new worker epoch", "agentenv", 3, 2, 3, "first", "second", false},
+		{"executor restarted alone", "agentenv", 2, 2, 2, "first", "second", true},
+		{"missing instance", "agentenv", 2, 0, 2, "", "", true},
+		{"missing epoch", "agentenv", 0, 0, 0, "", "first", true},
+		{"original backend", "gvisor", 2, 0, 0, "", "", false},
+		{"wrong backend", "gvisor", 2, 0, 2, "", "first", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := &ateapipb.Worker{SandboxClass: tc.class, Epoch: tc.epoch, Status: &ateapipb.WorkerStatus{RegisteredEpoch: tc.registered, ExecutorInstanceId: tc.previous}}
+			req := &ateapipb.RegisterWorkerRequest{ExpectedEpoch: tc.expected, ExecutorInstanceId: tc.next}
+			if err := validateExecutorRegistration(worker, req); (err != nil) != tc.wantError {
+				t.Fatalf("registration error=%v, want error=%v", err, tc.wantError)
+			}
+		})
+	}
+}

@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/testpostgres"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -58,29 +59,31 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 	t.Helper()
 	ctx := context.Background()
-	admin := requireAdminPool(t)
-	databaseName := fmt.Sprintf("ateapi_test_%d", databaseCount.Add(1))
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+databaseName); err != nil {
-		t.Fatalf("creating PostgreSQL test database: %v", err)
-	}
-
-	config := admin.Config().Copy()
-	config.ConnConfig.Database = databaseName
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatalf("connecting to PostgreSQL test database: %v", err)
+	pool := testpostgres.Open(t)
+	if pool == nil {
+		admin := requireAdminPool(t)
+		databaseName := fmt.Sprintf("ateapi_test_%d", databaseCount.Add(1))
+		if _, err := admin.Exec(ctx, "CREATE DATABASE "+databaseName); err != nil {
+			t.Fatalf("creating PostgreSQL test database: %v", err)
+		}
+		config := admin.Config().Copy()
+		config.ConnConfig.Database = databaseName
+		var err error
+		pool, err = pgxpool.NewWithConfig(ctx, config)
+		if err != nil {
+			t.Fatalf("connecting to PostgreSQL test database: %v", err)
+		}
+		t.Cleanup(func() {
+			pool.Close()
+			if _, err := admin.Exec(context.Background(), "DROP DATABASE "+databaseName); err != nil {
+				t.Errorf("dropping PostgreSQL test database: %v", err)
+			}
+		})
 	}
 	persistence, err := atepg.NewPersistence(ctx, pool)
 	if err != nil {
-		pool.Close()
 		t.Fatalf("creating PostgreSQL persistence: %v", err)
 	}
-	t.Cleanup(func() {
-		pool.Close()
-		if _, err := admin.Exec(context.Background(), "DROP DATABASE "+databaseName); err != nil {
-			t.Errorf("dropping PostgreSQL test database: %v", err)
-		}
-	})
 	// The server always wires a PolicyManager, so test stores do too.
 	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {

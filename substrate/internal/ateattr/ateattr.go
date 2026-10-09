@@ -372,7 +372,7 @@ const SandboxClassUnknown = "unknown"
 // problem stays visible.
 func NormalizeSandboxClass(class string) string {
 	switch atev1alpha1.SandboxClass(class) {
-	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
+	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM, atev1alpha1.SandboxClassAgentENV:
 		return class
 	default:
 		return SandboxClassUnknown

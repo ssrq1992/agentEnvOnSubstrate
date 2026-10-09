@@ -1024,3 +1024,20 @@ func TestSyncer_ReconcileErrorsAreClassified(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentENVIdentityBootstrapBeforeReadiness(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{NodeName: "node"}, Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIPs: []corev1.PodIP{{IP: "10.0.0.2"}}, ContainerStatuses: []corev1.ContainerStatus{{Name: ateomContainer, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}}}
+	if isWorkerEligible(pod) {
+		t.Fatal("fixture unexpectedly ready")
+	}
+	if !canBootstrapAgentENV(pod, atev1alpha1.SandboxClassAgentENV) {
+		t.Fatal("registration/readiness dependency cycle")
+	}
+	if canBootstrapAgentENV(pod, atev1alpha1.SandboxClassGvisor) {
+		t.Fatal("changed original backend readiness semantics")
+	}
+	pod.Status.ContainerStatuses[0].State.Running = nil
+	if canBootstrapAgentENV(pod, atev1alpha1.SandboxClassAgentENV) {
+		t.Fatal("executor container not started")
+	}
+}

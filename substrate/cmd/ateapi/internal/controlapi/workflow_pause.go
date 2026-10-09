@@ -67,6 +67,9 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 		// released the worker, so the record names none (#957).
 		return actor, nil
 	}
+	if err := requireConfirmedExtensions(actor); err != nil {
+		return nil, err
+	}
 	var marked *ateapipb.Actor
 	if marked, err = w.ensureMarkedPausing(leaseCtx, actorRef, actor); err != nil {
 		return nil, err
@@ -180,6 +183,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
+		Execution:             executionIdentity(actor, "pause", actor.GetStatus().GetInProgressLocalSnapshotName()),
 		TargetAteomUid:        assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),

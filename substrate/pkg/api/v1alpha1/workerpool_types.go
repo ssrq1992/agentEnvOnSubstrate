@@ -85,7 +85,17 @@ type WorkerPoolPodTemplate struct {
 	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.agentenv) || self.sandboxClass == 'agentenv'",message="agentenv configuration requires sandboxClass agentenv"
 type WorkerPoolSpec struct {
+	// AgentENV configures the embedded backend. Other classes ignore no settings:
+	// the admission rule requires the AgentENV class when this is specified.
+	// +optional
+	AgentENV *AgentENVWorkerConfig `json:"agentenv,omitempty"`
+
+	// PodIdentityIssuer selects stable-API certificate issuance for this pool.
+	// When absent, Kubernetes certificate projection is used.
+	// +optional
+	PodIdentityIssuer *PodIdentityIssuerConfig `json:"podIdentityIssuer,omitempty"`
 	// Replicas is the number of worker pods to run.
 	// +required
 	// +kubebuilder:validation:Minimum=0
@@ -110,9 +120,41 @@ type WorkerPoolSpec struct {
 	// See Also: TODOs in ActorTemplate SandboxClass
 	//
 	// +optional
-	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:validation:Enum=gvisor;microvm;agentenv
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
+}
+
+// AgentENVWorkerConfig sets bounded Actor and kernel device counts for one embedded Worker.
+type AgentENVWorkerConfig struct {
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=16384
+	// +kubebuilder:default=1
+	MaxActors int32 `json:"maxActors,omitempty"`
+
+	// MaxDevices counts all owned ublk devices, including shared and idle devices.
+	// Unknown creation/deletion outcomes continue consuming the budget.
+	// +optional
+	// +kubebuilder:validation:Minimum=4
+	// +kubebuilder:validation:Maximum=65536
+	// +kubebuilder:default=64
+	MaxDevices int32 `json:"maxDevices,omitempty"`
+}
+
+// PodIdentityIssuerConfig configures init/renewal containers. The ConfigMap
+// must be in the pool namespace and contain issuer-ca.crt, podidentity-ca.crt,
+// and servicedns-ca.crt. It contains public roots only.
+type PodIdentityIssuerConfig struct {
+	// +required
+	// +kubebuilder:validation:Pattern=`^https://[^/?#]+$`
+	Endpoint string `json:"endpoint"`
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	AgentImage string `json:"agentImage"`
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	TrustConfigMap string `json:"trustConfigMap"`
 }
 
 type WorkerPoolStatus struct {

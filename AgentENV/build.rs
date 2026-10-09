@@ -2,6 +2,15 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-changed=protocols/aenv-executor/v1/executor.proto");
+    tonic_prost_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile_protos(
+            &["protocols/aenv-executor/v1/executor.proto"],
+            &["protocols/aenv-executor/v1"],
+        )
+        .expect("failed to compile embedded executor protocol");
     println!("cargo:rerun-if-changed=services/api/proto/scheduler.proto");
     println!("cargo:rerun-if-changed=src/image/content.proto");
     println!("cargo:rerun-if-changed=src/image/build_history.proto");

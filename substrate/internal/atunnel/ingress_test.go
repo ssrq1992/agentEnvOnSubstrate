@@ -230,6 +230,9 @@ func TestServeHTTP(t *testing.T) {
 	s := newTestServer(t, upstreamURL)
 	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamHosts = append(upstreamHosts, r.Host)
+		if r.Header.Get(atenet.TargetActorUIDHeader) != "" {
+			t.Fatal("routing UID leaked to guest")
+		}
 		return &http.Response{
 			StatusCode: http.StatusNoContent,
 			Header:     make(http.Header),
@@ -263,6 +266,7 @@ func TestServeHTTP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
 			req.Host = tt.host
+			req.Header.Set(atenet.TargetActorUIDHeader, "uid-actor-1")
 			if tt.mixedCase {
 				req.Header.Set("ate-target-actor", tt.atespace+"/"+tt.actorName)
 			} else {
@@ -1211,5 +1215,73 @@ func TestIngressReincarnationSurvivesStaleDeactivate(t *testing.T) {
 	}
 	if s.active[ref] != nil {
 		t.Error("Deactivate left the actor active")
+	}
+}
+
+func TestAuthorizeIncarnationFence(t *testing.T) {
+	upstream, _ := url.Parse("http://actor.internal:80")
+	s := newTestServer(t, upstream)
+	if err := s.Activate("team-a", "actor-1", "uid-new", testDial); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   bool
+	}{
+		{"legacy", nil, true}, {"current", []string{"uid-new"}, true},
+		{"replaced", []string{"uid-old"}, false}, {"empty", []string{""}, false},
+		{"duplicate", []string{"uid-new", "uid-new"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "http://worker/", nil)
+			r.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+			for _, v := range tc.values {
+				r.Header.Add(atenet.TargetActorUIDHeader, v)
+			}
+			_, _, release, ok := s.authorize(r)
+			if release != nil {
+				release()
+			}
+			if ok != tc.want {
+				t.Fatalf("authorized=%v, want %v", ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthorizeAssignmentGeneration(t *testing.T) {
+	upstream, _ := url.Parse("http://actor.internal:80")
+	s := newTestServer(t, upstream)
+	if err := s.ActivateAssignment("team-a", "actor-1", "uid", 8, testDial); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		uid         string
+		generations []string
+		want        bool
+	}{
+		{"current", "uid", []string{"8"}, true}, {"old", "uid", []string{"7"}, false},
+		{"zero", "uid", []string{"0"}, false}, {"missing uid", "", []string{"8"}, false},
+		{"duplicate", "uid", []string{"8", "8"}, false}, {"malformed", "uid", []string{"eight"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "http://worker/", nil)
+			r.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+			if tc.uid != "" {
+				r.Header.Set(atenet.TargetActorUIDHeader, tc.uid)
+			}
+			for _, v := range tc.generations {
+				r.Header.Add(atenet.TargetGenerationHeader, v)
+			}
+			_, _, release, ok := s.authorize(r)
+			if release != nil {
+				release()
+			}
+			if ok != tc.want {
+				t.Fatalf("authorized %v", ok)
+			}
+		})
 	}
 }

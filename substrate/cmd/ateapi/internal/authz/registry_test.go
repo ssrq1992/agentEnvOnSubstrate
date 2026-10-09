@@ -97,6 +97,16 @@ func TestDefaultRPCPermissions(t *testing.T) {
 		},
 
 		// Actors.
+		{name: "ConnectActor requires update permission", fullMethod: ateapipb.Control_ConnectActor_FullMethodName, req: &ateapipb.ConnectActorRequest{Actor: actorRef, Uid: "uid"}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "SuspendActor", fullMethod: ateapipb.Control_SuspendActor_FullMethodName, req: &ateapipb.SuspendActorRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "CaptureActorSnapshot", fullMethod: ateapipb.Control_CaptureActorSnapshot_FullMethodName, req: &ateapipb.CaptureActorSnapshotRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "PauseActor", fullMethod: ateapipb.Control_PauseActor_FullMethodName, req: &ateapipb.PauseActorRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "ResumeActor", fullMethod: ateapipb.Control_ResumeActor_FullMethodName, req: &ateapipb.ResumeActorRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "RevertActor", fullMethod: ateapipb.Control_RevertActor_FullMethodName, req: &ateapipb.RevertActorRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "GetActorEgressPolicy", fullMethod: ateapipb.Control_GetActorEgressPolicy_FullMethodName, req: &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef}, want: []check{{RelationCanGet, "actor:team-a/runner"}}},
+		{name: "CreateActorEgressPolicy", fullMethod: ateapipb.Control_CreateActorEgressPolicy_FullMethodName, req: &ateapipb.CreateActorEgressPolicyRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "UpdateActorEgressPolicy", fullMethod: ateapipb.Control_UpdateActorEgressPolicy_FullMethodName, req: &ateapipb.UpdateActorEgressPolicyRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
+		{name: "DeleteActorEgressPolicy", fullMethod: ateapipb.Control_DeleteActorEgressPolicy_FullMethodName, req: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actorRef}, want: []check{{RelationCanUpdate, "actor:team-a/runner"}}},
 		{
 			name:       "CreateActor checks the atespace and the template",
 			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
@@ -106,6 +116,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
 			},
 		},
+		{name: "GetActorGuestMetrics", fullMethod: ateapipb.Control_GetActorGuestMetrics_FullMethodName, req: &ateapipb.GetActorGuestMetricsRequest{Actor: actorRef, Uid: "uid"}, want: []check{{RelationCanGet, "actor:team-a/runner"}}},
 		{
 			name:       "GetActor",
 			fullMethod: ateapipb.Control_GetActor_FullMethodName,

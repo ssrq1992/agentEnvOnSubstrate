@@ -28,6 +28,8 @@ const (
 	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
 	// /dev/kvm and vhost devices.
 	SandboxClassMicroVM SandboxClass = "microvm"
+	// SandboxClassAgentENV uses Firecracker and ublk on dedicated Linux nodes.
+	SandboxClassAgentENV SandboxClass = "agentenv"
 )
 
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
@@ -58,7 +60,7 @@ type SandboxConfigSpec struct {
 	// sandbox_config.sandbox_class.
 	//
 	// +required
-	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:validation:Enum=gvisor;microvm;agentenv
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
 
